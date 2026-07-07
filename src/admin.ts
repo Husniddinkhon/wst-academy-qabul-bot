@@ -13,6 +13,28 @@ export async function notifyAdmins(ctx: BotContext, adminIds: number[], lead: Le
   await Promise.allSettled(adminIds.map((adminId) => ctx.telegram.sendMessage(adminId, formatLead(lead))));
 }
 
+
+export interface HotLeadNotification {
+  username?: string;
+  telegramId?: number;
+  message: string;
+  reason: string;
+}
+
+export async function notifyHotLead(ctx: BotContext, adminIds: number[], lead: HotLeadNotification): Promise<void> {
+  if (adminIds.length === 0) return;
+
+  const text = [
+    '🔥 Hot lead detected',
+    `Username: ${lead.username ? `@${lead.username}` : '—'}`,
+    `Telegram ID: ${lead.telegramId ?? '—'}`,
+    `Message: ${lead.message}`,
+    `Reason: ${lead.reason}`,
+  ].join('\n');
+
+  await Promise.allSettled(adminIds.map((adminId) => ctx.telegram.sendMessage(adminId, text)));
+}
+
 export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[]): void {
   bot.command('id', async (ctx) => {
     await ctx.reply(`Sizning Telegram ID: ${ctx.from?.id ?? 'aniqlanmadi'}`);
