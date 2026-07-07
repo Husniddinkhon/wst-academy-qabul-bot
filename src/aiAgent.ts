@@ -30,6 +30,14 @@ const GUARANTEED_JOB_ANSWER =
 
 const FALLBACK_ANSWER = 'Savolingiz qabul qilindi. Operatorimiz siz bilan bog‘lanadi: @hr_wst';
 
+const PRICE_ANSWER = [
+  'Kurs narxi 2 500 000 so‘m.',
+  'To‘lovni 2 bo‘lib qilish mumkin:',
+  '1 500 000 so‘m avval, qolgan qismi 1-hafta oxirigacha.',
+  '',
+  'Ro‘yxatdan o‘tish uchun pastdagi “Ro‘yxatdan o‘tish” tugmasini bosing.',
+].join('\n');
+
 export function scoreLead(message: string): { score: LeadScore; reason: string } {
   if (HOT_PATTERNS.some((pattern) => pattern.test(message))) {
     return { score: 'HOT', reason: 'Narx, to‘lov, boshlanish, telefon, manzil yoki ro‘yxatdan o‘tish niyati aniqlandi.' };
@@ -47,6 +55,10 @@ export async function answerWithAiAgent(message: string, config: AiConfig): Prom
 
   if (asksGuaranteedJob(message)) {
     return { answer: GUARANTEED_JOB_ANSWER, ...scored };
+  }
+
+  if (asksPrice(message)) {
+    return { answer: PRICE_ANSWER, ...scored };
   }
 
   if (!config.enabled || !config.apiKey || !config.baseUrl || !config.model) {
@@ -74,7 +86,7 @@ export async function answerWithAiAgent(message: string, config: AiConfig): Prom
   }
 
   const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  const answer = data.choices?.[0]?.message?.content?.trim();
+  const answer = formatAiAnswer(data.choices?.[0]?.message?.content);
 
   if (!answer) {
     throw new Error('AI provider returned an empty answer.');
@@ -95,10 +107,23 @@ function asksGuaranteedJob(message: string): boolean {
   return /\b(ish\s*kafolat|kafolatlangan\s*ish|ishga\s*joylashtirasiz|ish\s*topib\s*berasiz)\b/i.test(message);
 }
 
+function asksPrice(message: string): boolean {
+  return /\b(narx|necha pul|to['‘’`]?lov|tolov|bo['‘’`]?lib|bolib|muddatli|rassrochka)\b/i.test(message) || /\bqancha\b.*\b(turadi|pul|narx|so['‘’`]?m)\b/i.test(message);
+}
+
+function formatAiAnswer(answer?: string): string | undefined {
+  return answer
+    ?.replace(/UZS/gi, 'so‘m')
+    .replace(/[*_#]/g, '')
+    .trim();
+}
+
 function buildSystemPrompt(): string {
   return [
     'Siz WST Academy Telegram botidagi AI sales konsultantsiz.',
     'Faqat Uzbek Latin tilida, qisqa, aniq, muloyim va sotuvga yo‘naltirilgan javob bering.',
+    'Markdown belgilaridan foydalanmang. Javobda **, _, # belgilarini ishlatmang.',
+    'Narx valyutasini har doim so‘m deb yozing. UZS yozmang.',
     'Faqat WST Academy “0 dan ustagacha” videokuzatuv kursi haqida javob bering.',
     'Ruxsat etilgan mavzular: videokuzatuv, IP camera, DVR/NVR, cabling, IP network, security systems, course duration, price, installment, certificate, job guidance, registration.',
     'Aloqasiz savol bo‘lsa, suhbatni kurs mavzusiga qaytaring.',
@@ -116,6 +141,7 @@ function buildSystemPrompt(): string {
     'Natija: sertifikat va ishga yo‘naltirish.',
     'Ish kafolatlanadi deb hech qachon va’da bermang. “ishga yo‘naltirish” iborasidan foydalaning.',
     `Agar kafolatli ish haqida so‘ralsa, aynan shunday javob bering: “${GUARANTEED_JOB_ANSWER}”`,
+    `Agar foydalanuvchi narx yoki to‘lov haqida so‘rasa, aynan shunday javob bering:\n${PRICE_ANSWER}`,
     'Agar foydalanuvchi qiziqsa, “Ro‘yxatdan o‘tish” tugmasini bosishni taklif qiling.',
     `Operator so‘ralsa, ${courseInfo.operator} va ${courseInfo.phone} ni ko‘rsating.`,
   ].join('\n');
