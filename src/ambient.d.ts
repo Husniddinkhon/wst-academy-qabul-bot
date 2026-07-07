@@ -26,6 +26,7 @@ declare module 'telegraf' {
     use(middleware: unknown): void;
     start(handler: (ctx: C) => unknown): void;
     hears(trigger: string, handler: (ctx: C) => unknown): void;
+    on(updateType: string, handler: (ctx: C) => unknown): void;
     command(command: string, handler: (ctx: C) => unknown): void;
     catch(handler: (error: unknown, ctx: { update: { update_id: number } }) => unknown): void;
     launch(options?: { dropPendingUpdates?: boolean }): Promise<void>;
@@ -43,7 +44,7 @@ declare module 'telegraf' {
       telegram: Telegraf['telegram'];
       reply(text: string, extra?: unknown): Promise<unknown>;
       replyWithDocument(document: unknown): Promise<unknown>;
-      scene: { session: D; enter(sceneId: string): Promise<unknown>; leave(): Promise<unknown> };
+      scene: { session: D; current?: { id?: string }; enter(sceneId: string): Promise<unknown>; leave(): Promise<unknown> };
       wizard: { next(): unknown };
     }
 
@@ -95,4 +96,4 @@ declare const Buffer: {
   from(data: string, encoding?: string): unknown;
 };
 
-declare function fetch(input: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number }>;
+declare function fetch(input: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;

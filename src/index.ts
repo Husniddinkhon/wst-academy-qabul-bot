@@ -1,9 +1,10 @@
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
 import { courseInfo } from './course.js';
-import { registerAdminCommands } from './admin.js';
+import { notifyHotLead, registerAdminCommands } from './admin.js';
 import { JsonLeadStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
+import { answerWithAiAgent, getAiFallbackAnswer, isAiReady } from './aiAgent.js';
 import type { BotContext } from './types.js';
 
 async function bootstrap(): Promise<void> {
@@ -22,6 +23,29 @@ async function bootstrap(): Promise<void> {
   });
 
   registerAdminCommands(bot, store, config.adminIds);
+
+  bot.on('text', async (ctx) => {
+    const message = ctx.message?.text?.trim();
+
+    if (!message || !isAiReady(config.ai) || message.startsWith('/') || ctx.scene.current) return;
+
+    try {
+      const result = await answerWithAiAgent(message, config.ai);
+      await ctx.reply(result.answer, mainMenu());
+
+      if (result.score === 'HOT') {
+        await notifyHotLead(ctx, config.adminIds, {
+          username: ctx.from?.username,
+          telegramId: ctx.from?.id,
+          message,
+          reason: result.reason,
+        });
+      }
+    } catch (error) {
+      console.error('AI agent failed:', error instanceof Error ? error.message : error);
+      await ctx.reply(getAiFallbackAnswer(), mainMenu());
+    }
+  });
 
   bot.catch((error, ctx) => {
     console.error(`Bot error for update ${ctx.update.update_id}:`, error);
