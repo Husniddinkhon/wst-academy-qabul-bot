@@ -1,0 +1,30 @@
+{
+  "name": "wst-academy-qabul-bot",
+  "version": "1.0.0",
+  "description": "Production-ready Telegram lead capture bot for WST Academy admissions.",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [
+    "telegram",
+    "telegraf",
+    "wst-academy",
+    "lead-capture"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
