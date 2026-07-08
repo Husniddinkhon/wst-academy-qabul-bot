@@ -20,6 +20,22 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
   const guard = async (ctx: BotContext): Promise<boolean> => { if (isAdmin(ctx, adminIds)) return true; await ctx.reply('⛔ Bu buyruq faqat adminlar uchun.'); return false; };
   const commandText = (ctx: BotContext): string => ctx.message && 'text' in ctx.message && ctx.message.text ? ctx.message.text : '';
   bot.command('id', async (ctx) => ctx.reply(`Sizning Telegram ID: ${ctx.from?.id ?? 'aniqlanmadi'}`));
+  bot.command('admin_help', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    return ctx.reply([
+      'Admin buyruqlari:',
+      '/leads_today — bugungi leadlar',
+      '/last_leads — oxirgi 10 lead',
+      '/hot_leads — hot leadlar',
+      '/call_requests — qo‘ng‘iroq so‘ragan leadlar',
+      '/stats — umumiy statistika',
+      '/export_csv — barcha leadlarni CSV qilish',
+      '/lead <telegram_id> — bitta leadni ko‘rish',
+      `/set_status <telegram_id> <status> — status o‘zgartirish (${VALID_STATUSES.join(', ')})`,
+      '/operator_note <telegram_id> <note> — operator izohi qo‘shish',
+      '/retry_webhooks — yuborilmay qolgan webhooklarni qayta yuborish',
+    ].join('\n'));
+  });
   bot.command('leads_today', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList(await store.today(), 'Bugun hali lead yo‘q.')); });
   bot.command('last_leads', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList(await store.last(10), 'Hali lead yo‘q.')); });
   bot.command('hot_leads', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList((await store.all()).filter((l) => l.status === 'Hot'), 'Hot lead yo‘q.')); });

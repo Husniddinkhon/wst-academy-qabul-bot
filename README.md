@@ -9,14 +9,19 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - Admin notifications for every new lead
 - `/id` command to discover Telegram user ID
 - Admin commands:
+  - `/admin_help` — admin command reference
   - `/leads_today` — today's leads
   - `/last_leads` — latest 10 leads
+  - `/hot_leads` — hot AI-scored leads
+  - `/call_requests` — users who requested an operator call
   - `/export_csv` — export all leads as CSV
   - `/stats` — total, today, and last 7 days statistics
   - `/lead <telegram_id>` — inspect one lead
   - `/set_status <telegram_id> <status>` — update CRM status
   - `/operator_note <telegram_id> <note>` — save operator notes
   - `/retry_webhooks` — retry failed webhook deliveries
+- Daily admin report automation
+- Follow-up automation for leads who have not completed registration
 - Local JSON storage with atomic writes
 - Optional n8n-compatible lead webhook delivery
 - Environment-based configuration; no bot token in code
@@ -61,7 +66,7 @@ DAILY_REPORT_HOUR=21
 NODE_ENV=production
 ```
 
-Use `/id` in the bot to find admin Telegram IDs, then add them to `ADMIN_IDS`. Set `LEAD_WEBHOOK_URL` only if you want lead events posted to n8n or another webhook receiver. `WEBHOOK_FAILED_FILE` stores failed webhook deliveries for `/retry_webhooks`, and `FOLLOWUPS_FILE` stores follow-up automation state.
+Use `/id` in the bot to find admin Telegram IDs, then add them to `ADMIN_IDS`. Admins can run `/admin_help` in Telegram to see command formats. Set `LEAD_WEBHOOK_URL` only if you want lead events posted to n8n or another webhook receiver. `WEBHOOK_FAILED_FILE` stores failed webhook deliveries for `/retry_webhooks`, and `FOLLOWUPS_FILE` stores follow-up automation state. `DAILY_REPORT_ENABLED=false` disables the daily admin summary; `DAILY_REPORT_HOUR` accepts an hour from 0 to 23 and defaults to 21.
 
 ## Scripts
 

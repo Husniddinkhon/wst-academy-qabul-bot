@@ -163,6 +163,7 @@ async function bootstrap(): Promise<void> {
   await bot.telegram.setMyCommands([
     { command: 'start', description: 'Botni boshlash va kurs haqida maʼlumot' },
     { command: 'id', description: 'Telegram ID ni ko‘rish' },
+    { command: 'admin_help', description: 'Admin buyruqlari ro‘yxati (admin)' },
     { command: 'leads_today', description: 'Bugungi leadlar (admin)' },
     { command: 'last_leads', description: 'Oxirgi leadlar (admin)' },
     { command: 'hot_leads', description: 'Hot leadlar (admin)' },
