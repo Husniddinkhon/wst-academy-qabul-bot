@@ -14,6 +14,8 @@ export async function notifyHotLead(ctx: BotContext, adminIds: number[], lead: H
 export async function notifyCallRequestLead(ctx: BotContext, adminIds: number[], lead: HotLeadNotification): Promise<void> { if (adminIds.length === 0 || !canNotifyHotLead(lead.telegramId)) return; await Promise.allSettled(adminIds.map((adminId) => ctx.telegram.sendMessage(adminId, ['🔥 Call request lead',`Username: ${lead.username ? `@${lead.username}` : '—'}`,`Telegram ID: ${lead.telegramId ?? '—'}`,`Phone: ${lead.phone ?? '—'}`,`Message: ${lead.message}`,`Reason: ${lead.reason}`].join('\n')))); }
 function canNotifyHotLead(telegramId?: number): boolean { if (!telegramId) return true; const now = Date.now(); const last = lastHotLeadAtByTelegramId.get(telegramId) ?? 0; if (now - last < HOT_LEAD_COOLDOWN_MS) return false; lastHotLeadAtByTelegramId.set(telegramId, now); return true; }
 
+const VALID_STATUSES: LeadStatus[] = ['New', 'Warm', 'Hot', 'RegistrationCompleted', 'CallRequested', 'OperatorContacted', 'Paid', 'Rejected'];
+
 export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[], failureStore: JsonWebhookFailureStore, leadWebhookUrl?: string): void {
   const guard = async (ctx: BotContext): Promise<boolean> => { if (isAdmin(ctx, adminIds)) return true; await ctx.reply('⛔ Bu buyruq faqat adminlar uchun.'); return false; };
   const commandText = (ctx: BotContext): string => ctx.message && 'text' in ctx.message && ctx.message.text ? ctx.message.text : '';
@@ -26,6 +28,19 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
   bot.command('export_csv', async (ctx) => { if (!(await guard(ctx))) return; const csv = await store.toCsv(); return ctx.replyWithDocument(Input.fromBuffer(Buffer.from(csv, 'utf8'), `wst-leads-${new Date().toISOString().slice(0, 10)}.csv`)); });
   bot.command('retry_webhooks', async (ctx) => { if (!(await guard(ctx))) return; const r = await retryFailedWebhooks(leadWebhookUrl, failureStore); return ctx.reply(`Webhook retry: attempted ${r.attempted}, sent ${r.sent}, remaining ${r.remaining}`); });
   bot.command('lead', async (ctx) => { if (!(await guard(ctx))) return; const id = Number(commandText(ctx).split(/\s+/)[1]); const lead = Number.isSafeInteger(id) ? await store.getByTelegramId(id) : undefined; return ctx.reply(lead ? formatLead(lead) : 'Lead topilmadi.'); });
-  bot.command('set_status', async (ctx) => { if (!(await guard(ctx))) return; const [, idText, status] = commandText(ctx).split(/\s+/); const lead = await store.updateByTelegramId(Number(idText), { status: status as LeadStatus }); if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead); return ctx.reply(lead ? `Status yangilandi: ${lead.status}` : 'Lead topilmadi.'); });
+  bot.command('set_status', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const [, idText, statusText] = commandText(ctx).split(/\s+/);
+    const telegramId = Number(idText);
+    const status = VALID_STATUSES.find((item) => item.toLowerCase() === statusText?.toLowerCase());
+
+    if (!Number.isSafeInteger(telegramId) || !status) {
+      return ctx.reply(`Format: /set_status <telegram_id> <status>\nStatuslar: ${VALID_STATUSES.join(', ')}`);
+    }
+
+    const lead = await store.updateByTelegramId(telegramId, { status });
+    if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead);
+    return ctx.reply(lead ? `Status yangilandi: ${lead.status}` : 'Lead topilmadi.');
+  });
   bot.command('operator_note', async (ctx) => { if (!(await guard(ctx))) return; const match = commandText(ctx).match(/^\/operator_note\s+(\d+)\s+([\s\S]+)/); const lead = match ? await store.updateByTelegramId(Number(match[1]), { operatorNote: match[2] }) : undefined; if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead); return ctx.reply(lead ? 'Operator note saqlandi.' : 'Format: /operator_note <telegram_id> <note>'); });
 }

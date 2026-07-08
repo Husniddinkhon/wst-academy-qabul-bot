@@ -170,6 +170,9 @@ async function bootstrap(): Promise<void> {
     { command: 'stats', description: 'Lead statistikasi (admin)' },
     { command: 'export_csv', description: 'Leadlarni CSV qilish (admin)' },
     { command: 'retry_webhooks', description: 'Webhook retry (admin)' },
+    { command: 'lead', description: 'Leadni Telegram ID bilan topish (admin)' },
+    { command: 'set_status', description: 'Lead statusini yangilash (admin)' },
+    { command: 'operator_note', description: 'Leadga operator izohi (admin)' },
   ]);
 
   const followUpTimer = startFollowUpAutomation(bot, store, followUpStore);

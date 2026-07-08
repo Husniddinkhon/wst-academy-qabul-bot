@@ -13,6 +13,10 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
   - `/last_leads` — latest 10 leads
   - `/export_csv` — export all leads as CSV
   - `/stats` — total, today, and last 7 days statistics
+  - `/lead <telegram_id>` — inspect one lead
+  - `/set_status <telegram_id> <status>` — update CRM status
+  - `/operator_note <telegram_id> <note>` — save operator notes
+  - `/retry_webhooks` — retry failed webhook deliveries
 - Local JSON storage with atomic writes
 - Optional n8n-compatible lead webhook delivery
 - Environment-based configuration; no bot token in code
@@ -49,11 +53,15 @@ Edit `.env`:
 BOT_TOKEN=your-real-bot-token
 ADMIN_IDS=123456789,987654321
 LEADS_FILE=./data/leads.json
+WEBHOOK_FAILED_FILE=./data/webhook_failed.json
+FOLLOWUPS_FILE=./data/followups.json
 LEAD_WEBHOOK_URL=
+DAILY_REPORT_ENABLED=true
+DAILY_REPORT_HOUR=21
 NODE_ENV=production
 ```
 
-Use `/id` in the bot to find admin Telegram IDs, then add them to `ADMIN_IDS`. Set `LEAD_WEBHOOK_URL` only if you want completed leads posted to n8n or another webhook receiver.
+Use `/id` in the bot to find admin Telegram IDs, then add them to `ADMIN_IDS`. Set `LEAD_WEBHOOK_URL` only if you want lead events posted to n8n or another webhook receiver. `WEBHOOK_FAILED_FILE` stores failed webhook deliveries for `/retry_webhooks`, and `FOLLOWUPS_FILE` stores follow-up automation state.
 
 ## Scripts
 
@@ -69,7 +77,7 @@ npm start
 
 ## Data storage
 
-Leads are stored locally in `data/leads.json` by default. You can change this path with `LEADS_FILE`.
+Leads are stored locally in `data/leads.json` by default. You can change this path with `LEADS_FILE`. Failed webhook deliveries and follow-up state default to `data/webhook_failed.json` and `data/followups.json`, configurable with `WEBHOOK_FAILED_FILE` and `FOLLOWUPS_FILE`.
 
 The `data/*.json` files are ignored by Git to avoid committing personal lead data.
 

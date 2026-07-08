@@ -27,6 +27,11 @@ function parseTemperature(value: string | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0.3;
 }
 
+function parseReportHour(value: string | undefined): number {
+  const parsed = Number(value ?? 21);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 23 ? parsed : 21;
+}
+
 function parseAdminIds(value: string | undefined): number[] {
   if (!value) return [];
 
@@ -50,10 +55,10 @@ export function loadConfig(): AppConfig {
     adminIds: parseAdminIds(process.env.ADMIN_IDS),
     leadsFile: process.env.LEADS_FILE ?? './data/leads.json',
     leadWebhookUrl: process.env.LEAD_WEBHOOK_URL || undefined,
-    webhookFailedFile: './data/webhook_failed.json',
-    followupsFile: './data/followups.json',
+    webhookFailedFile: process.env.WEBHOOK_FAILED_FILE ?? './data/webhook_failed.json',
+    followupsFile: process.env.FOLLOWUPS_FILE ?? './data/followups.json',
     dailyReportEnabled: process.env.DAILY_REPORT_ENABLED !== 'false',
-    dailyReportHour: Number(process.env.DAILY_REPORT_HOUR ?? 21),
+    dailyReportHour: parseReportHour(process.env.DAILY_REPORT_HOUR),
     operatorUsername: process.env.OPERATOR_USERNAME || '@hr_wst',
     operatorPhone: process.env.OPERATOR_PHONE || '+998333011511',
     isProduction: process.env.NODE_ENV === 'production',
