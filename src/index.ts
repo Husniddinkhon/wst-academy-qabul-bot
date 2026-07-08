@@ -9,6 +9,46 @@ import { answerWithAiAgent, extractPhoneNumber, getAiFallbackAnswer, getPhoneReq
 import { sendLeadWebhook } from './webhook.js';
 import type { BotContext, Lead } from './types.js';
 
+
+async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
+  const from = ctx.from;
+  if (!from) return;
+
+  const lead: Lead = {
+    id: randomUUID(),
+    createdAt: new Date().toISOString(),
+    telegramId: from.id,
+    username: from.username,
+    firstName: from.first_name,
+    lastName: from.last_name,
+    fullName: [from.first_name, from.last_name].filter(Boolean).join(' ') || 'Call request',
+    phone,
+    age: '',
+    district: '',
+    experience: '',
+    preferredTime: '',
+    notes: message,
+    source: 'call_request',
+    status: 'Hot',
+  };
+
+  await store.add(lead);
+
+  try {
+    await sendLeadWebhook(leadWebhookUrl, lead);
+  } catch (error) {
+    console.error('Lead webhook delivery failed:', error);
+  }
+
+  await notifyCallRequestLead(ctx, adminIds, {
+    username: from.username,
+    telegramId: from.id,
+    phone,
+    message,
+    reason: 'User asked for a call.',
+  });
+}
+
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const store = new JsonLeadStore(config.leadsFile);
@@ -26,12 +66,22 @@ async function bootstrap(): Promise<void> {
 
   registerAdminCommands(bot, store, config.adminIds);
 
+  bot.on('contact', async (ctx) => {
+    const phone = ctx.message?.contact?.phone_number;
+    if (!ctx.session.waitingForCallPhone || !phone) return;
+
+    const originalMessage = ctx.session.waitingForCallPhone.message;
+    ctx.session.waitingForCallPhone = undefined;
+    await saveCallRequestLead(ctx, store, config.adminIds, config.leadWebhookUrl, phone, originalMessage);
+    await ctx.reply('Rahmat. Telefon raqamingiz qabul qilindi. Operatorimiz tez orada siz bilan bog‘lanadi.', mainMenu());
+  });
+
   bot.on('text', async (ctx) => {
     const message = ctx.message?.text?.trim();
 
     if (!message || message.startsWith('/') || ctx.scene.current) return;
 
-    if (isCallRequest(message)) {
+    if (ctx.session.waitingForCallPhone) {
       const phone = extractPhoneNumber(message);
 
       if (!phone) {
@@ -39,44 +89,24 @@ async function bootstrap(): Promise<void> {
         return;
       }
 
-      const from = ctx.from;
-      if (!from) return;
+      const originalMessage = ctx.session.waitingForCallPhone.message;
+      ctx.session.waitingForCallPhone = undefined;
+      await saveCallRequestLead(ctx, store, config.adminIds, config.leadWebhookUrl, phone, originalMessage);
+      await ctx.reply('Rahmat. Telefon raqamingiz qabul qilindi. Operatorimiz tez orada siz bilan bog‘lanadi.', mainMenu());
+      return;
+    }
 
-      const lead: Lead = {
-        id: randomUUID(),
-        createdAt: new Date().toISOString(),
-        telegramId: from.id,
-        username: from.username,
-        firstName: from.first_name,
-        lastName: from.last_name,
-        fullName: [from.first_name, from.last_name].filter(Boolean).join(' ') || 'Call request',
-        phone,
-        age: '',
-        district: '',
-        experience: '',
-        preferredTime: '',
-        notes: message,
-        source: 'telegram_bot_call_request',
-        status: 'Hot',
-      };
+    if (isCallRequest(message)) {
+      const phone = extractPhoneNumber(message);
 
-      await store.add(lead);
-
-      try {
-        await sendLeadWebhook(config.leadWebhookUrl, lead);
-      } catch (error) {
-        console.error('Lead webhook delivery failed:', error);
+      if (!phone) {
+        ctx.session.waitingForCallPhone = { message };
+        await ctx.reply(getPhoneRequestAnswer(message), mainMenu());
+        return;
       }
 
-      await notifyCallRequestLead(ctx, config.adminIds, {
-        username: from.username,
-        telegramId: from.id,
-        phone,
-        message,
-        reason: 'User asked for operator/call.',
-      });
-
-      await ctx.reply('Rahmat. Operatorimiz tez orada siz bilan bog‘lanadi.', mainMenu());
+      await saveCallRequestLead(ctx, store, config.adminIds, config.leadWebhookUrl, phone, message);
+      await ctx.reply('Rahmat. Telefon raqamingiz qabul qilindi. Operatorimiz tez orada siz bilan bog‘lanadi.', mainMenu());
       return;
     }
 

@@ -12,7 +12,7 @@ export const courseInfo = {
   benefits: 'sertifikat va ishga yo‘naltirish bo‘yicha maslahat',
   channel: 'https://t.me/wstacademy_uz',
   operator: process.env.OPERATOR_USERNAME || '@hr_wst',
-  phone: '+998 33 301 15 11',
+  phone: process.env.OPERATOR_PHONE || '+998333011511',
 } as const;
 
 export function formatCourseIntro(): string {

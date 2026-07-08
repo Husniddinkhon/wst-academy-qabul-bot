@@ -28,12 +28,17 @@ const HOT_PATTERNS = [
 const WARM_PATTERNS = [/\b(dastur|programma|nima o['‘’`]?rgatiladi|davomiy|qancha davom|ustoz|o['‘’`]?qituvchi|format|online|offline)\b/i];
 
 const CALL_REQUEST_PATTERNS = [
-  /qo['‘’`]?ng['‘’`]?iroq\s+qiling/i,
-  /telefon\s+qiling/i,
   /menga\s+qo['‘’`]?ng['‘’`]?iroq\s+qiling/i,
+  /menga\s+qungiroq\s+qiling/i,
+  /qo['‘’`]?ng['‘’`]?iroq\s+qilinglar/i,
+  /qungiroq\s+qilinglar/i,
+  /qo['‘’`]?ng['‘’`]?iroq\s+qiling/i,
+  /qungiroq\s+qiling/i,
+  /telefon\s+qiling/i,
   /aloqaga\s+chiqing/i,
   /bog['‘’`]?laning/i,
   /менга\s+қўнғироқ\s+қилинг/i,
+  /қўнғироқ\s+қилинглар/i,
   /телефон\s+қилинг/i,
   /алоқага\s+чиқинг/i,
   /свяжитесь/i,
@@ -74,7 +79,7 @@ const PRICE_ANSWER_CYRILLIC = [
 ].join('\n');
 
 export function scoreLead(message: string): { score: LeadScore; reason: string } {
-  if (isCallRequest(message)) return { score: 'HOT', reason: 'User asked for operator/call.' };
+  if (isCallRequest(message)) return { score: 'HOT', reason: 'User asked for a call.' };
 
   if (HOT_PATTERNS.some((pattern) => pattern.test(message))) {
     return { score: 'HOT', reason: 'Narx, to‘lov, boshlanish, telefon, manzil yoki ro‘yxatdan o‘tish niyati aniqlandi.' };
@@ -206,6 +211,7 @@ function buildSystemPrompt(cyrillic: boolean): string {
     `Telefon: ${courseInfo.phone}.`,
     'Natija: sertifikat va ishga yo‘naltirish.',
     'Ish kafolatlanadi deb hech qachon va’da bermang. “ishga yo‘naltirish” iborasidan foydalaning.',
+    'Agar foydalanuvchi qo‘ng‘iroq so‘rasa, telefon raqamini yuborishini so‘rang va operator bog‘lanishini ayting.',
     'Agar foydalanuvchi qiziqsa, “Ro‘yxatdan o‘tish” tugmasini bosishni taklif qiling.',
     `Operator so‘ralsa, ${courseInfo.operator} va ${courseInfo.phone} ni ko‘rsating.`,
   ].join('\n');
