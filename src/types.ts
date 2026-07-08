@@ -1,6 +1,6 @@
 import type { Context, Scenes } from 'telegraf';
 
-export type LeadStatus = 'new' | 'notified';
+export type LeadStatus = 'new' | 'notified' | 'Hot';
 
 export interface Lead {
   id: string;
