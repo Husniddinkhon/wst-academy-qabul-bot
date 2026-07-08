@@ -32,6 +32,9 @@ export interface LeadDraft {
 
 export interface BotSession extends Scenes.WizardSessionData {
   leadDraft?: LeadDraft;
+  waitingForCallPhone?: {
+    message: string;
+  };
 }
 
-export type BotContext = Context & Scenes.WizardContext<BotSession>;
+export type BotContext = Context & Scenes.WizardContext<BotSession> & { session: BotSession };

@@ -28,7 +28,7 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - The bot never promises a guaranteed job
 - Channel: <https://t.me/wstacademy_uz>
 - Operator: `@hr_wst`
-- Phone: `+998 33 301 15 11`
+- Phone: `+998333011511`
 
 ## Requirements
 

@@ -8,6 +8,8 @@ export interface AppConfig {
   adminIds: number[];
   leadsFile: string;
   leadWebhookUrl?: string;
+  operatorUsername: string;
+  operatorPhone: string;
   isProduction: boolean;
   ai: AiConfig;
 }
@@ -44,6 +46,8 @@ export function loadConfig(): AppConfig {
     adminIds: parseAdminIds(process.env.ADMIN_IDS),
     leadsFile: process.env.LEADS_FILE ?? './data/leads.json',
     leadWebhookUrl: process.env.LEAD_WEBHOOK_URL || undefined,
+    operatorUsername: process.env.OPERATOR_USERNAME || '@hr_wst',
+    operatorPhone: process.env.OPERATOR_PHONE || '+998333011511',
     isProduction: process.env.NODE_ENV === 'production',
     ai: {
       enabled: parseBoolean(process.env.AI_ENABLED),
