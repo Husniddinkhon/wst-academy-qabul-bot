@@ -16,6 +16,33 @@ function canNotifyHotLead(telegramId?: number): boolean { if (!telegramId) retur
 
 const VALID_STATUSES: LeadStatus[] = ['New', 'Warm', 'Hot', 'RegistrationCompleted', 'CallRequested', 'OperatorContacted', 'Paid', 'Rejected'];
 
+function yesNo(value: unknown): string {
+  return value ? 'OK' : 'MISSING';
+}
+
+function configured(value: unknown): string {
+  return value ? 'configured' : 'empty';
+}
+
+function envValue(name: string, fallback = ''): string {
+  return process.env[name] || fallback;
+}
+
+async function safeStoreStats(store: JsonLeadStore): Promise<string[]> {
+  try {
+    const stats = await store.stats();
+    return [
+      `Jami leadlar: ${stats.total}`,
+      `Bugun: ${stats.today}`,
+      `Hot: ${stats.hot}`,
+      `Call requests: ${stats.callRequests}`,
+      `No phone: ${stats.noPhone}`,
+    ];
+  } catch (error) {
+    return [`Lead storage: ERROR (${error instanceof Error ? error.message : 'unknown'})`];
+  }
+}
+
 export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[], failureStore: JsonWebhookFailureStore, leadWebhookUrl?: string): void {
   const guard = async (ctx: BotContext): Promise<boolean> => { if (isAdmin(ctx, adminIds)) return true; await ctx.reply('⛔ Bu buyruq faqat adminlar uchun.'); return false; };
   const commandText = (ctx: BotContext): string => ctx.message && 'text' in ctx.message && ctx.message.text ? ctx.message.text : '';
@@ -24,6 +51,9 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     if (!(await guard(ctx))) return;
     return ctx.reply([
       'Admin buyruqlari:',
+      '/setup_status — sozlamalar holati',
+      '/health — bot sog‘liq tekshiruvi',
+      '/ads_check — Telegram Ads tayyorlik tekshiruvi',
       '/leads_today — bugungi leadlar',
       '/last_leads — oxirgi 10 lead',
       '/hot_leads — hot leadlar',
@@ -36,6 +66,67 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '/retry_webhooks — yuborilmay qolgan webhooklarni qayta yuborish',
     ].join('\n'));
   });
+
+  bot.command('setup_status', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    return ctx.reply([
+      '⚙️ Setup status',
+      `BOT_TOKEN: ${yesNo(process.env.BOT_TOKEN)}`,
+      `ADMIN_IDS: ${adminIds.length > 0 ? `configured (${adminIds.length})` : 'MISSING'}`,
+      `LEADS_FILE: ${envValue('LEADS_FILE', './data/leads.json')}`,
+      `LEAD_WEBHOOK_URL: ${configured(leadWebhookUrl)}`,
+      `WEBHOOK_FAILED_FILE: ${envValue('WEBHOOK_FAILED_FILE', './data/webhook_failed.json')}`,
+      `FOLLOWUPS_FILE: ${envValue('FOLLOWUPS_FILE', './data/followups.json')}`,
+      `NODE_ENV: ${envValue('NODE_ENV', 'not set')}`,
+      `AI_ENABLED: ${envValue('AI_ENABLED', 'false')}`,
+      `AI_PROVIDER: ${envValue('AI_PROVIDER', 'openai_compatible')}`,
+      `AI_API_KEY: ${yesNo(process.env.AI_API_KEY)}`,
+      `AI_BASE_URL: ${envValue('AI_BASE_URL', 'not set')}`,
+      `AI_MODEL: ${envValue('AI_MODEL', 'not set')}`,
+      `OPERATOR_USERNAME: ${envValue('OPERATOR_USERNAME', '@hr_wst')}`,
+      `OPERATOR_PHONE: ${envValue('OPERATOR_PHONE', '+998333011511')}`,
+      `DAILY_REPORT_ENABLED: ${envValue('DAILY_REPORT_ENABLED', 'true')}`,
+      `DAILY_REPORT_HOUR: ${envValue('DAILY_REPORT_HOUR', '21')}`,
+    ].join('\n'));
+  });
+
+  bot.command('health', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const statsLines = await safeStoreStats(store);
+    return ctx.reply([
+      '✅ Health check',
+      'Bot: online',
+      `Admin: ${adminIds.length > 0 ? 'configured' : 'missing'}`,
+      `AI: ${process.env.AI_ENABLED === 'true' && process.env.AI_API_KEY ? 'enabled' : 'disabled or incomplete'}`,
+      `Webhook: ${configured(leadWebhookUrl)}`,
+      `Operator: ${envValue('OPERATOR_USERNAME', '@hr_wst')} / ${envValue('OPERATOR_PHONE', '+998333011511')}`,
+      ...statsLines,
+    ].join('\n'));
+  });
+
+  bot.command('ads_check', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    return ctx.reply([
+      '📣 Telegram Ads readiness',
+      'Destination tavsiya: avval kanal, keyin bot.',
+      'Safe URL: t.me/wstacademy_uz',
+      '',
+      'Safe ad text:',
+      'Videokuzatuv tizimlarini amaliy o‘rganing. 1 oylik offline kurs: 12 dars, real uskunalar va amaliy mashg‘ulotlar.',
+      '',
+      'Tekshiruv:',
+      `Bot token: ${yesNo(process.env.BOT_TOKEN)}`,
+      `AI: ${process.env.AI_ENABLED === 'true' && process.env.AI_API_KEY ? 'OK' : 'incomplete'}`,
+      `Operator: ${envValue('OPERATOR_USERNAME', '@hr_wst')}`,
+      `Webhook: ${configured(leadWebhookUrl)}`,
+      '',
+      'Reklamada vaqtincha ishlatmang:',
+      'ish kafolati, tez boyish, 100% daromad, ish taklifi, daromadli kasb.',
+      '',
+      'Rasmli reklamadan oldin text-only safe versiyani reviewga yuboring.',
+    ].join('\n'));
+  });
+
   bot.command('leads_today', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList(await store.today(), 'Bugun hali lead yo‘q.')); });
   bot.command('last_leads', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList(await store.last(10), 'Hali lead yo‘q.')); });
   bot.command('hot_leads', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList((await store.all()).filter((l) => l.status === 'Hot'), 'Hot lead yo‘q.')); });
