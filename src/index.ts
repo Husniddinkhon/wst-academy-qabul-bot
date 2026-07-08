@@ -5,7 +5,7 @@ import { courseInfo } from './course.js';
 import { notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
 import { JsonLeadStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
-import { answerWithAiAgent, extractPhoneNumber, getAiFallbackAnswer, getPhoneRequestAnswer, getUnrelatedTopicAnswer, isAiReady, isCallRequest, isUnrelatedTopic } from './aiAgent.js';
+import { answerWithAiAgent, extractPhoneNumber, getAiFallbackAnswer, getPhoneRequestAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic } from './aiAgent.js';
 import { sendLeadWebhook } from './webhook.js';
 import type { BotContext, Lead } from './types.js';
 
@@ -49,6 +49,30 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, adminI
   });
 }
 
+async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>): Promise<void> {
+  if (isUnrelatedTopic(message)) {
+    await ctx.reply(getUnrelatedTopicAnswer(message), mainMenu());
+    return;
+  }
+
+  try {
+    const result = await answerWithAiAgent(message, config.ai);
+    await ctx.reply(result.answer, mainMenu());
+
+    if (result.score === 'HOT') {
+      await notifyHotLead(ctx, config.adminIds, {
+        username: ctx.from?.username,
+        telegramId: ctx.from?.id,
+        message,
+        reason: result.reason,
+      });
+    }
+  } catch (error) {
+    console.error('AI agent failed:', error instanceof Error ? error.message : error);
+    await ctx.reply(getAiFallbackAnswer(message), mainMenu());
+  }
+}
+
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const store = new JsonLeadStore(config.leadsFile);
@@ -85,7 +109,14 @@ async function bootstrap(): Promise<void> {
       const phone = extractPhoneNumber(message);
 
       if (!phone) {
-        await ctx.reply(getPhoneRequestAnswer(message), mainMenu());
+        if (isCallRequestCancel(message)) {
+          ctx.session.waitingForCallPhone = undefined;
+          await ctx.reply('Mayli. Kerak bo‘lsa, pastdagi menyudan kurs haqida so‘rashingiz yoki ro‘yxatdan o‘tishingiz mumkin.', mainMenu());
+          return;
+        }
+
+        ctx.session.waitingForCallPhone = undefined;
+        await answerSalesAgent(ctx, message, config);
         return;
       }
 
@@ -110,29 +141,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    if (isUnrelatedTopic(message)) {
-      await ctx.reply(getUnrelatedTopicAnswer(message), mainMenu());
-      return;
-    }
-
-    if (!isAiReady(config.ai)) return;
-
-    try {
-      const result = await answerWithAiAgent(message, config.ai);
-      await ctx.reply(result.answer, mainMenu());
-
-      if (result.score === 'HOT') {
-        await notifyHotLead(ctx, config.adminIds, {
-          username: ctx.from?.username,
-          telegramId: ctx.from?.id,
-          message,
-          reason: result.reason,
-        });
-      }
-    } catch (error) {
-      console.error('AI agent failed:', error instanceof Error ? error.message : error);
-      await ctx.reply(getAiFallbackAnswer(message), mainMenu());
-    }
+    await answerSalesAgent(ctx, message, config);
   });
 
   bot.catch((error, ctx) => {

@@ -17,7 +17,7 @@ export interface AiAgentResult {
   reason: string;
 }
 
-const PHONE_PATTERN = /(?:\+?998|8)?[\s()\-.]*(?:\d[\s()\-.]*){9}/;
+const PHONE_PATTERN = /(?:\+?998[\s()\-.]*)?(?:\d[\s()\-.]*){9}/;
 
 const HOT_PATTERNS = [
   /\b(narx|qancha|necha pul|to['‘’`]?lov|tolov|bo['‘’`]?lib|bolib|muddatli|rassrochka|boshlan|start)\b/i,
@@ -78,6 +78,11 @@ const PRICE_ANSWER_CYRILLIC = [
   'Рўйхатдан ўтиш учун пастдаги “Рўйхатдан ўтиш” тугмасини босинг.',
 ].join('\n');
 
+const PROGRAM_ANSWER_LATIN =
+  'Kursda kamera turlari, kabel tortish, DVR/NVR sozlash, IP tarmoq, telefon orqali ko‘rish va nosozliklarni topishni amaliy o‘rganasiz.';
+const PROGRAM_ANSWER_CYRILLIC =
+  'Курсда камера турлари, кабель тортиш, DVR/NVR созлаш, IP тармоқ, телефон орқали кўриш ва носозликларни топишни амалий ўрганасиз.';
+
 export function scoreLead(message: string): { score: LeadScore; reason: string } {
   if (isCallRequest(message)) return { score: 'HOT', reason: 'User asked for a call.' };
 
@@ -102,6 +107,10 @@ export async function answerWithAiAgent(message: string, config: AiConfig): Prom
 
   if (asksPrice(message)) {
     return { answer: cyrillic ? PRICE_ANSWER_CYRILLIC : PRICE_ANSWER_LATIN, ...scored };
+  }
+
+  if (asksProgram(message)) {
+    return { answer: cyrillic ? PROGRAM_ANSWER_CYRILLIC : PROGRAM_ANSWER_LATIN, ...scored };
   }
 
   if (isUnrelatedTopic(message)) {
@@ -164,7 +173,17 @@ export function isCallRequest(message: string): boolean {
 }
 
 export function extractPhoneNumber(message: string): string | undefined {
-  return message.match(PHONE_PATTERN)?.[0].trim();
+  const match = message.match(PHONE_PATTERN)?.[0].trim();
+  if (!match) return undefined;
+
+  const digits = match.replace(/\D/g, '');
+  if (digits.length === 9 || (digits.length === 12 && digits.startsWith('998'))) return match;
+
+  return undefined;
+}
+
+export function isCallRequestCancel(message: string): boolean {
+  return /\b(bekor|yo['‘’`]?q|keyin|hozir\s+emas)\b/i.test(message) || /\b(кейин|хозир\s+эмас|ҳозир\s+эмас|йўқ|йук|бекор)\b/i.test(message);
 }
 
 function hasCyrillic(message: string): boolean {
@@ -181,6 +200,10 @@ function asksGuaranteedJob(message: string): boolean {
 
 function asksPrice(message: string): boolean {
   return /\b(narx|necha pul|to['‘’`]?lov|tolov|bo['‘’`]?lib|bolib|muddatli|rassrochka)\b/i.test(message) || /\bqancha\b.*\b(turadi|pul|narx|so['‘’`]?m)\b/i.test(message) || /\b(нарх|неча пул|тўлов|толов|бўлиб|муддатли|рассрочка|қанча)\b/i.test(message);
+}
+
+function asksProgram(message: string): boolean {
+  return /\b(dastur|programma|nima\s+o['‘’`]?rgan|nimalarni\s+o['‘’`]?rgan|yana\s+nimalarni|kamera|dvr|nvr|ip\s+tarmoq|kabel|nosozlik)\b/i.test(message) || /\b(дастур|программа|нима\s+ўрган|нималарни\s+ўрган|камера|кабель|носозлик)\b/i.test(message);
 }
 
 function formatAiAnswer(answer?: string): string | undefined {
@@ -209,6 +232,7 @@ function buildSystemPrompt(cyrillic: boolean): string {
     `Kanal: ${courseInfo.channel}.`,
     `Operator: ${courseInfo.operator}.`,
     `Telefon: ${courseInfo.phone}.`,
+    'Dastur: kamera turlari, kabel tortish, DVR/NVR sozlash, IP tarmoq, telefon orqali ko‘rish, nosozliklarni topish.',
     'Natija: sertifikat va ishga yo‘naltirish.',
     'Ish kafolatlanadi deb hech qachon va’da bermang. “ishga yo‘naltirish” iborasidan foydalaning.',
     'Agar foydalanuvchi qo‘ng‘iroq so‘rasa, telefon raqamini yuborishini so‘rang va operator bog‘lanishini ayting.',
