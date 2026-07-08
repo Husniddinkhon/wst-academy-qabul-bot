@@ -1,11 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
 import { courseInfo } from './course.js';
-import { notifyHotLead, registerAdminCommands } from './admin.js';
+import { notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
 import { JsonLeadStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
-import { answerWithAiAgent, getAiFallbackAnswer, isAiReady } from './aiAgent.js';
-import type { BotContext } from './types.js';
+import { answerWithAiAgent, extractPhoneNumber, getAiFallbackAnswer, getPhoneRequestAnswer, getUnrelatedTopicAnswer, isAiReady, isCallRequest, isUnrelatedTopic } from './aiAgent.js';
+import { sendLeadWebhook } from './webhook.js';
+import type { BotContext, Lead } from './types.js';
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
@@ -27,7 +29,63 @@ async function bootstrap(): Promise<void> {
   bot.on('text', async (ctx) => {
     const message = ctx.message?.text?.trim();
 
-    if (!message || !isAiReady(config.ai) || message.startsWith('/') || ctx.scene.current) return;
+    if (!message || message.startsWith('/') || ctx.scene.current) return;
+
+    if (isCallRequest(message)) {
+      const phone = extractPhoneNumber(message);
+
+      if (!phone) {
+        await ctx.reply(getPhoneRequestAnswer(message), mainMenu());
+        return;
+      }
+
+      const from = ctx.from;
+      if (!from) return;
+
+      const lead: Lead = {
+        id: randomUUID(),
+        createdAt: new Date().toISOString(),
+        telegramId: from.id,
+        username: from.username,
+        firstName: from.first_name,
+        lastName: from.last_name,
+        fullName: [from.first_name, from.last_name].filter(Boolean).join(' ') || 'Call request',
+        phone,
+        age: '',
+        district: '',
+        experience: '',
+        preferredTime: '',
+        notes: message,
+        source: 'telegram_bot_call_request',
+        status: 'Hot',
+      };
+
+      await store.add(lead);
+
+      try {
+        await sendLeadWebhook(config.leadWebhookUrl, lead);
+      } catch (error) {
+        console.error('Lead webhook delivery failed:', error);
+      }
+
+      await notifyCallRequestLead(ctx, config.adminIds, {
+        username: from.username,
+        telegramId: from.id,
+        phone,
+        message,
+        reason: 'User asked for operator/call.',
+      });
+
+      await ctx.reply('Rahmat. Operatorimiz tez orada siz bilan bog‘lanadi.', mainMenu());
+      return;
+    }
+
+    if (isUnrelatedTopic(message)) {
+      await ctx.reply(getUnrelatedTopicAnswer(message), mainMenu());
+      return;
+    }
+
+    if (!isAiReady(config.ai)) return;
 
     try {
       const result = await answerWithAiAgent(message, config.ai);
@@ -43,7 +101,7 @@ async function bootstrap(): Promise<void> {
       }
     } catch (error) {
       console.error('AI agent failed:', error instanceof Error ? error.message : error);
-      await ctx.reply(getAiFallbackAnswer(), mainMenu());
+      await ctx.reply(getAiFallbackAnswer(message), mainMenu());
     }
   });
 

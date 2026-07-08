@@ -22,8 +22,8 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - Duration: 1 month
 - Lessons: 12 lessons
 - Format: offline practical course
-- Price: 2 500 000 UZS
-- Installment: 1 500 000 UZS first, remaining by end of first week
+- Price: 2 500 000 so‘m
+- Installment: 1 500 000 so‘m first, remaining by end of first week
 - Certificate and job guidance are included
 - The bot never promises a guaranteed job
 - Channel: <https://t.me/wstacademy_uz>

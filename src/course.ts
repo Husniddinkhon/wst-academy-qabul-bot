@@ -1,3 +1,7 @@
+import dotenv from 'dotenv';
+
+dotenv.config();
+
 export const courseInfo = {
   title: 'WST Academy “0 dan ustagacha” videokuzatuv kursi',
   duration: '1 oy',
@@ -7,7 +11,7 @@ export const courseInfo = {
   installment: '1 500 000 so‘m avval, qolgan qismi 1-hafta oxirigacha',
   benefits: 'sertifikat va ishga yo‘naltirish bo‘yicha maslahat',
   channel: 'https://t.me/wstacademy_uz',
-  operator: '@hr_wst',
+  operator: process.env.OPERATOR_USERNAME || '@hr_wst',
   phone: '+998 33 301 15 11',
 } as const;
 
