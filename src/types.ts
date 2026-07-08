@@ -1,30 +1,47 @@
 import type { Context, Scenes } from 'telegraf';
 
-export type LeadStatus = 'new' | 'notified' | 'Hot';
+export type LeadStatus = 'New' | 'Warm' | 'Hot' | 'RegistrationCompleted' | 'CallRequested' | 'OperatorContacted' | 'Paid' | 'Rejected';
+export type LeadSource = 'telegram_ads' | 'organic' | 'channel' | 'call_request' | 'registration' | 'ai_chat' | 'unknown';
+export type LeadWebhookEvent = 'lead_created' | 'lead_updated' | 'hot_lead' | 'call_request';
+
+export interface LeadMessage {
+  text: string;
+  createdAt: string;
+}
 
 export interface Lead {
   id: string;
   createdAt: string;
+  updatedAt: string;
   telegramId: number;
   username?: string;
   firstName?: string;
   lastName?: string;
   fullName: string;
   phone: string;
+  city: string;
   age: string;
-  district: string;
+  workStatus: string;
   experience: string;
+  goal: string;
+  paymentOption: string;
+  status: LeadStatus;
+  source: LeadSource;
+  intent: string;
+  lastMessage: string;
+  messages: LeadMessage[];
+  operatorNote: string;
+  nextFollowUp: string;
+  paymentStatus: string;
   preferredTime: string;
   notes?: string;
-  source: string;
-  status: LeadStatus;
 }
 
 export interface LeadDraft {
   fullName?: string;
   phone?: string;
   age?: string;
-  district?: string;
+  city?: string;
   experience?: string;
   preferredTime?: string;
   notes?: string;
@@ -35,6 +52,15 @@ export interface BotSession extends Scenes.WizardSessionData {
   waitingForCallPhone?: {
     message: string;
   };
+  source?: LeadSource;
+}
+
+export interface FollowUpState {
+  telegramId: number;
+  startedAt: string;
+  count: number;
+  lastSentAt?: string;
+  registrationCompleted?: boolean;
 }
 
 export type BotContext = Context & Scenes.WizardContext<BotSession> & { session: BotSession };

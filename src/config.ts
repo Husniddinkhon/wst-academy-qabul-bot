@@ -8,6 +8,10 @@ export interface AppConfig {
   adminIds: number[];
   leadsFile: string;
   leadWebhookUrl?: string;
+  webhookFailedFile: string;
+  followupsFile: string;
+  dailyReportEnabled: boolean;
+  dailyReportHour: number;
   operatorUsername: string;
   operatorPhone: string;
   isProduction: boolean;
@@ -46,6 +50,10 @@ export function loadConfig(): AppConfig {
     adminIds: parseAdminIds(process.env.ADMIN_IDS),
     leadsFile: process.env.LEADS_FILE ?? './data/leads.json',
     leadWebhookUrl: process.env.LEAD_WEBHOOK_URL || undefined,
+    webhookFailedFile: './data/webhook_failed.json',
+    followupsFile: './data/followups.json',
+    dailyReportEnabled: process.env.DAILY_REPORT_ENABLED !== 'false',
+    dailyReportHour: Number(process.env.DAILY_REPORT_HOUR ?? 21),
     operatorUsername: process.env.OPERATOR_USERNAME || '@hr_wst',
     operatorPhone: process.env.OPERATOR_PHONE || '+998333011511',
     isProduction: process.env.NODE_ENV === 'production',
