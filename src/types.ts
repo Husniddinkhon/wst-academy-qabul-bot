@@ -3,6 +3,7 @@ import type { Context, Scenes } from 'telegraf';
 export type LeadStatus = 'New' | 'Warm' | 'Hot' | 'RegistrationCompleted' | 'CallRequested' | 'OperatorContacted' | 'Paid' | 'Rejected';
 export type LeadSource = 'telegram_ads' | 'organic' | 'channel' | 'call_request' | 'registration' | 'ai_chat' | 'unknown';
 export type LeadWebhookEvent = 'lead_created' | 'lead_updated' | 'hot_lead' | 'call_request';
+export type StudentStatus = 'NotEnrolled' | 'Enrolled' | 'Active' | 'Completed' | 'Dropped';
 
 export interface LeadMessage {
   text: string;
@@ -36,6 +37,10 @@ export interface Lead {
   preferredTime: string;
   notes?: string;
   campaignId?: string;
+  studentStatus?: StudentStatus;
+  agentActionCount?: number;
+  lastAgentAction?: string;
+  lastAgentAt?: string;
 }
 
 export interface LeadDraft {

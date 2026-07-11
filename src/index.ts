@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
 import { courseInfo, formatCourseIntro, formatCourseProgram, formatPriceInfo } from './course.js';
-import { notifyAdmins, notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
+import { isAdmin, notifyAdmins, notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
 import { answerWithAiAgent, extractPhoneNumber, getAiFallbackAnswer, getPhoneRequestAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic } from './aiAgent.js';
@@ -110,7 +110,8 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
 
     if ((result.score === 'HOT' || result.score === 'WARM') && ctx.from) {
       const now = new Date().toISOString();
-      const saved = await store.upsert({ id: randomUUID(), createdAt: now, updatedAt: now, telegramId: ctx.from.id, username: ctx.from.username, firstName: ctx.from.first_name, lastName: ctx.from.last_name, fullName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || (result.score === 'HOT' ? 'Hot lead' : 'Warm lead'), phone: extractPhoneNumber(message) ?? '', city: '', age: '', workStatus: '', experience: '', goal: '', paymentOption: '', status: result.score === 'HOT' ? 'Hot' : 'Warm', source: ctx.session.source ?? 'ai_chat', campaignId: ctx.session.campaignId, intent: inferIntent(message), lastMessage: message, messages: [{ text: message, createdAt: now }], operatorNote: '', nextFollowUp: '', paymentStatus: '', preferredTime: '' });
+      const existing = await store.getByTelegramId(ctx.from.id);
+      const saved = await store.upsert({ id: randomUUID(), createdAt: now, updatedAt: now, telegramId: ctx.from.id, username: ctx.from.username, firstName: ctx.from.first_name, lastName: ctx.from.last_name, fullName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || (result.score === 'HOT' ? 'Hot lead' : 'Warm lead'), phone: extractPhoneNumber(message) ?? '', city: '', age: '', workStatus: '', experience: '', goal: '', paymentOption: '', status: result.score === 'HOT' ? 'Hot' : 'Warm', source: ctx.session.source ?? 'ai_chat', campaignId: ctx.session.campaignId, agentActionCount: (existing?.agentActionCount ?? 0) + 1, lastAgentAction: `AI reply (${result.score})`, lastAgentAt: now, intent: inferIntent(message), lastMessage: message, messages: [{ text: message, createdAt: now }], operatorNote: '', nextFollowUp: '', paymentStatus: '', preferredTime: '' });
       await followUpStore.ensure({ telegramId: ctx.from.id, startedAt: saved.lead.createdAt, count: 0 });
       await deliverLeadWebhook(config.leadWebhookUrl, failureStore, result.score === 'HOT' ? 'hot_lead' : (saved.created ? 'lead_created' : 'lead_updated'), saved.lead);
       if (result.score === 'HOT') await notifyHotLead(ctx, config.adminIds, {
@@ -154,6 +155,18 @@ async function bootstrap(): Promise<void> {
   });
 
   registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId);
+
+  bot.on('photo', async (ctx) => {
+    if (!isAdmin(ctx, config.adminIds)) return;
+    const caption = ctx.message?.caption?.trim() ?? '';
+    if (!caption.startsWith('/channel_photo')) return;
+    const text = caption.replace(/^\/channel_photo(?:@\w+)?\s*/i, '').trim();
+    const photos = ctx.message?.photo ?? [];
+    const photoFileId = photos[photos.length - 1]?.file_id;
+    if (!photoFileId || text.length < 20 || text.length > 1024) return ctx.reply('Photo caption 20–1024 belgi bo‘lishi kerak.');
+    const post = await channelPosts.create(text, photoFileId);
+    return ctx.reply(`Rasmli draft saqlandi: ${post.id}\nYuborish: /channel_publish ${post.id}`);
+  });
 
   bot.on('contact', async (ctx) => {
     const phone = ctx.message?.contact?.phone_number;
@@ -230,6 +243,8 @@ async function bootstrap(): Promise<void> {
     { command: 'hot_leads', description: 'Hot leadlar (admin)' },
     { command: 'call_requests', description: 'Call requestlar (admin)' },
     { command: 'stats', description: 'Lead statistikasi (admin)' },
+    { command: 'sales_report', description: 'Sales funnel va active studentlar (admin)' },
+    { command: 'set_student', description: 'O‘quvchi holatini yangilash (admin)' },
     { command: 'export_csv', description: 'Leadlarni CSV qilish (admin)' },
     { command: 'retry_webhooks', description: 'Webhook retry (admin)' },
     { command: 'lead', description: 'Leadni Telegram ID bilan topish (admin)' },

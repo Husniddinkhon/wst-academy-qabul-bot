@@ -1,5 +1,5 @@
 import { Input } from 'telegraf';
-import type { BotContext, LeadStatus } from './types.js';
+import type { BotContext, LeadStatus, StudentStatus } from './types.js';
 import type { JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { formatLead, formatLeadList } from './messages.js';
 import { deliverLeadWebhook, retryFailedWebhooks } from './webhook.js';
@@ -16,6 +16,7 @@ export async function notifyCallRequestLead(ctx: BotContext, adminIds: number[],
 function canNotifyHotLead(telegramId?: number): boolean { if (!telegramId) return true; const now = Date.now(); const last = lastHotLeadAtByTelegramId.get(telegramId) ?? 0; if (now - last < HOT_LEAD_COOLDOWN_MS) return false; lastHotLeadAtByTelegramId.set(telegramId, now); return true; }
 
 const VALID_STATUSES: LeadStatus[] = ['New', 'Warm', 'Hot', 'RegistrationCompleted', 'CallRequested', 'OperatorContacted', 'Paid', 'Rejected'];
+const STUDENT_STATUSES: StudentStatus[] = ['NotEnrolled', 'Enrolled', 'Active', 'Completed', 'Dropped'];
 
 function yesNo(value: unknown): string {
   return value ? 'OK' : 'MISSING';
@@ -64,6 +65,8 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '/hot_leads — hot leadlar',
       '/call_requests — qo‘ng‘iroq so‘ragan leadlar',
       '/stats — umumiy statistika',
+      '/sales_report — заявкадан active studentgacha funnel',
+      '/set_student <telegram_id> <status> — o‘quvchi holati',
       '/export_csv — barcha leadlarni CSV qilish',
       '/lead <telegram_id> — bitta leadni ko‘rish',
       `/set_status <telegram_id> <status> — status o‘zgartirish (${VALID_STATUSES.join(', ')})`,
@@ -171,7 +174,9 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     const post = id ? await channelPosts.get(id) : undefined;
     if (!post || post.status !== 'Draft') return ctx.reply('Publish qilinadigan Draft topilmadi.');
     try {
-      const sent = await bot.telegram.sendMessage(channelChatId, post.text);
+      const sent = post.photoFileId
+        ? await bot.telegram.sendPhoto(channelChatId, post.photoFileId, { caption: post.text })
+        : await bot.telegram.sendMessage(channelChatId, post.text);
       await channelPosts.update(post.id, { status: 'Published', publishedAt: new Date().toISOString(), publishedMessageId: sent.message_id });
       return ctx.reply(`Kanalga yuborildi: ${post.id}, message ${sent.message_id}`);
     } catch (error) {
@@ -187,6 +192,28 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
   bot.command('hot_leads', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList((await store.all()).filter((l) => l.status === 'Hot'), 'Hot lead yo‘q.')); });
   bot.command('call_requests', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList((await store.all()).filter((l) => l.status === 'CallRequested'), 'Call request yo‘q.')); });
   bot.command('stats', async (ctx) => { if (!(await guard(ctx))) return; const s = await store.stats(); return ctx.reply([`📊 Statistika`,`Jami leadlar: ${s.total}`,`Bugun: ${s.today}`,`Oxirgi 7 kun: ${s.last7Days}`,`Hot: ${s.hot}`,`Call requests: ${s.callRequests}`,`Completed: ${s.completed}`,`No phone: ${s.noPhone}`].join('\n')); });
+  bot.command('sales_report', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const leads = await store.all();
+    const registered = leads.filter((lead) => lead.status === 'RegistrationCompleted' || lead.status === 'Paid').length;
+    const paid = leads.filter((lead) => lead.status === 'Paid').length;
+    const active = leads.filter((lead) => lead.studentStatus === 'Active').length;
+    const completed = leads.filter((lead) => lead.studentStatus === 'Completed').length;
+    const withPhone = leads.filter((lead) => Boolean(lead.phone)).length;
+    const agentWorked = leads.filter((lead) => (lead.agentActionCount ?? 0) > 0).length;
+    const conversion = leads.length ? ((active / leads.length) * 100).toFixed(1) : '0.0';
+    return ctx.reply(['📈 Sales funnel', `Jami заявка: ${leads.length}`, `Agent ishlagan leadlar: ${agentWorked}`, `Telefon olingan: ${withPhone}`, `Ro‘yxatdan o‘tgan: ${registered}`, `To‘lov tasdiqlangan: ${paid}`, `Haqiqatan o‘qiyapti: ${active}`, `Kursni tugatgan: ${completed}`, `Lead → active conversion: ${conversion}%`].join('\n'));
+  });
+  bot.command('set_student', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const [, idText, statusText] = commandText(ctx).split(/\s+/);
+    const telegramId = Number(idText);
+    const studentStatus = STUDENT_STATUSES.find((status) => status.toLowerCase() === statusText?.toLowerCase());
+    if (!Number.isSafeInteger(telegramId) || !studentStatus) return ctx.reply(`Format: /set_student <telegram_id> <status>\nStatuslar: ${STUDENT_STATUSES.join(', ')}`);
+    const lead = await store.updateByTelegramId(telegramId, { studentStatus });
+    if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead);
+    return ctx.reply(lead ? `Student status: ${studentStatus}` : 'Lead topilmadi.');
+  });
   bot.command('export_csv', async (ctx) => { if (!(await guard(ctx))) return; const csv = await store.toCsv(); return ctx.replyWithDocument(Input.fromBuffer(Buffer.from(csv, 'utf8'), `wst-leads-${new Date().toISOString().slice(0, 10)}.csv`)); });
   bot.command('retry_webhooks', async (ctx) => { if (!(await guard(ctx))) return; const r = await retryFailedWebhooks(leadWebhookUrl, failureStore); return ctx.reply(`Webhook retry: attempted ${r.attempted}, sent ${r.sent}, remaining ${r.remaining}`); });
   bot.command('lead', async (ctx) => { if (!(await guard(ctx))) return; const id = Number(commandText(ctx).split(/\s+/)[1]); const lead = Number.isSafeInteger(id) ? await store.getByTelegramId(id) : undefined; return ctx.reply(lead ? formatLead(lead) : 'Lead topilmadi.'); });

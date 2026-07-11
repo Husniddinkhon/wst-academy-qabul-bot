@@ -10,6 +10,7 @@ export interface ChannelPost {
   publishedAt?: string;
   publishedMessageId?: number;
   lastError?: string;
+  photoFileId?: string;
 }
 
 interface ChannelPostDatabase { posts: ChannelPost[]; }
@@ -17,8 +18,8 @@ interface ChannelPostDatabase { posts: ChannelPost[]; }
 export class JsonChannelPostStore {
   constructor(private readonly filePath: string) {}
 
-  async create(text: string): Promise<ChannelPost> {
-    const post: ChannelPost = { id: randomUUID().slice(0, 8), text, status: 'Draft', createdAt: new Date().toISOString() };
+  async create(text: string, photoFileId?: string): Promise<ChannelPost> {
+    const post: ChannelPost = { id: randomUUID().slice(0, 8), text, photoFileId, status: 'Draft', createdAt: new Date().toISOString() };
     const db = await this.read();
     db.posts.push(post);
     await this.write(db);

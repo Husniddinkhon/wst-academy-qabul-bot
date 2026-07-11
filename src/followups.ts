@@ -30,6 +30,7 @@ async function processFollowUps(bot: Telegraf<BotContext>, leadStore: JsonLeadSt
     try {
       await bot.telegram.sendMessage(state.telegramId, text);
       await followUpStore.upsert({ ...state, count: state.count + 1, lastSentAt: new Date().toISOString() });
+      if (lead) await leadStore.updateByTelegramId(lead.telegramId, { agentActionCount: (lead.agentActionCount ?? 0) + 1, lastAgentAction: 'Automated follow-up', lastAgentAt: new Date().toISOString() });
     } catch (error) {
       console.error(`Follow-up delivery failed for ${state.telegramId}:`, error instanceof Error ? error.message : String(error));
     }
