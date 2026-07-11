@@ -14,9 +14,12 @@ export function startFollowUpAutomation(bot: Telegraf<BotContext>, leadStore: Js
 
 async function processFollowUps(bot: Telegraf<BotContext>, leadStore: JsonLeadStore, followUpStore: JsonFollowUpStore): Promise<void> {
   const now = Date.now();
+  const tashkentHour = new Date(now + 5 * 60 * 60 * 1000).getUTCHours();
+  if (tashkentHour < 9 || tashkentHour >= 20) return;
   const states = await followUpStore.all();
   for (const state of states) {
     if (state.count >= 2) continue;
+    if (state.lastSentAt && now - new Date(state.lastSentAt).getTime() < 24 * 60 * 60 * 1000) continue;
     const lead = await leadStore.getByTelegramId(state.telegramId);
     if (lead && BLOCKED_STATUSES.has(lead.status)) continue;
     const startedAt = new Date(state.startedAt).getTime();
@@ -24,7 +27,11 @@ async function processFollowUps(bot: Telegraf<BotContext>, leadStore: JsonLeadSt
     if (!state.registrationCompleted && now - startedAt >= 2 * 60 * 60 * 1000) text = INCOMPLETE_REGISTRATION_TEXT;
     if (lead?.status === 'Warm' && !lead.phone && now - new Date(lead.updatedAt).getTime() >= 24 * 60 * 60 * 1000) text = WARM_NO_PHONE_TEXT;
     if (!text) continue;
-    await bot.telegram.sendMessage(state.telegramId, text);
-    await followUpStore.upsert({ ...state, count: state.count + 1, lastSentAt: new Date().toISOString() });
+    try {
+      await bot.telegram.sendMessage(state.telegramId, text);
+      await followUpStore.upsert({ ...state, count: state.count + 1, lastSentAt: new Date().toISOString() });
+    } catch (error) {
+      console.error(`Follow-up delivery failed for ${state.telegramId}:`, error instanceof Error ? error.message : String(error));
+    }
   }
 }

@@ -83,6 +83,7 @@ export class JsonWebhookFailureStore {
 
 export class JsonFollowUpStore {
   constructor(private readonly filePath: string) {}
+  async ensure(state: FollowUpState): Promise<void> { const db = await this.read(); if (db.followups.some((f) => f.telegramId === state.telegramId)) return; db.followups.push(state); await atomicWriteJson(this.filePath, db); }
   async upsert(state: FollowUpState): Promise<void> { const db = await this.read(); const i = db.followups.findIndex((f) => f.telegramId === state.telegramId); if (i === -1) db.followups.push(state); else db.followups[i] = { ...db.followups[i], ...state }; await atomicWriteJson(this.filePath, db); }
   async all(): Promise<FollowUpState[]> { return (await this.read()).followups; }
   private async read(): Promise<FollowUpDatabase> { try { const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as FollowUpDatabase; return { followups: Array.isArray(parsed.followups) ? parsed.followups : [] }; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { followups: [] }; throw e; } }

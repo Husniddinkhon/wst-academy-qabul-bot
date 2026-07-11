@@ -98,7 +98,7 @@ async function saveTelegramAdsLead(ctx: BotContext, store: JsonLeadStore, failur
   if (saved.created) await notifyAdmins(ctx, adminIds, saved.lead);
 }
 
-async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>, store: JsonLeadStore, failureStore: JsonWebhookFailureStore): Promise<void> {
+async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, followUpStore: JsonFollowUpStore): Promise<void> {
   if (isUnrelatedTopic(message)) {
     await ctx.reply(getUnrelatedTopicAnswer(message), mainMenu());
     return;
@@ -111,6 +111,7 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
     if ((result.score === 'HOT' || result.score === 'WARM') && ctx.from) {
       const now = new Date().toISOString();
       const saved = await store.upsert({ id: randomUUID(), createdAt: now, updatedAt: now, telegramId: ctx.from.id, username: ctx.from.username, firstName: ctx.from.first_name, lastName: ctx.from.last_name, fullName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || (result.score === 'HOT' ? 'Hot lead' : 'Warm lead'), phone: extractPhoneNumber(message) ?? '', city: '', age: '', workStatus: '', experience: '', goal: '', paymentOption: '', status: result.score === 'HOT' ? 'Hot' : 'Warm', source: ctx.session.source ?? 'ai_chat', campaignId: ctx.session.campaignId, intent: inferIntent(message), lastMessage: message, messages: [{ text: message, createdAt: now }], operatorNote: '', nextFollowUp: '', paymentStatus: '', preferredTime: '' });
+      await followUpStore.ensure({ telegramId: ctx.from.id, startedAt: saved.lead.createdAt, count: 0 });
       await deliverLeadWebhook(config.leadWebhookUrl, failureStore, result.score === 'HOT' ? 'hot_lead' : (saved.created ? 'lead_created' : 'lead_updated'), saved.lead);
       if (result.score === 'HOT') await notifyHotLead(ctx, config.adminIds, {
         username: ctx.from?.username,
@@ -180,7 +181,7 @@ async function bootstrap(): Promise<void> {
         }
 
         ctx.session.waitingForCallPhone = undefined;
-        await answerSalesAgent(ctx, message, config, store, failureStore);
+        await answerSalesAgent(ctx, message, config, store, failureStore, followUpStore);
         return;
       }
 
@@ -205,7 +206,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    await answerSalesAgent(ctx, message, config, store, failureStore);
+    await answerSalesAgent(ctx, message, config, store, failureStore, followUpStore);
   });
 
   bot.catch((error, ctx) => {
