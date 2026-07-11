@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
-import { courseInfo } from './course.js';
+import { courseInfo, formatCourseIntro, formatCourseProgram, formatPriceInfo } from './course.js';
 import { notifyAdmins, notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
@@ -143,6 +143,9 @@ async function bootstrap(): Promise<void> {
     await sendStart(ctx);
   });
   bot.hears('📝 Ro‘yxatdan o‘tish', (ctx) => ctx.scene.enter(REGISTRATION_SCENE_ID));
+  bot.hears('📚 Kurs dasturi', (ctx) => ctx.reply(formatCourseProgram(), mainMenu()));
+  bot.hears('💳 Narx va to‘lov', (ctx) => ctx.reply(formatPriceInfo(), mainMenu()));
+  bot.hears('ℹ️ Kurs haqida', (ctx) => ctx.reply(formatCourseIntro(), mainMenu()));
   bot.hears('📞 Operator bilan bog‘lanish', async (ctx) => {
     await ctx.reply([`👨‍💼 Operator: ${courseInfo.operator}`, `📞 Telefon: ${courseInfo.phone}`, `📣 Kanal: ${courseInfo.channel}`].join('\n'), mainMenu());
   });
@@ -208,7 +211,7 @@ async function bootstrap(): Promise<void> {
   });
 
   await bot.telegram.setMyDescription(config.botDescription);
-  await bot.telegram.setMyCommands([
+  const adminCommands = [
     { command: 'start', description: 'Botni boshlash va kurs haqida maʼlumot' },
     { command: 'id', description: 'Telegram ID ni ko‘rish' },
     { command: 'admin_help', description: 'Admin buyruqlari ro‘yxati (admin)' },
@@ -226,7 +229,9 @@ async function bootstrap(): Promise<void> {
     { command: 'lead', description: 'Leadni Telegram ID bilan topish (admin)' },
     { command: 'set_status', description: 'Lead statusini yangilash (admin)' },
     { command: 'operator_note', description: 'Leadga operator izohi (admin)' },
-  ]);
+  ];
+  await bot.telegram.setMyCommands([adminCommands[0]], { scope: { type: 'default' } });
+  await Promise.all(config.adminIds.map((chatId) => bot.telegram.setMyCommands(adminCommands, { scope: { type: 'chat', chat_id: chatId } })));
 
   const followUpTimer = startFollowUpAutomation(bot, store, followUpStore);
   const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);

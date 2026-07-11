@@ -34,3 +34,30 @@ export function formatCourseIntro(): string {
     `📞 Telefon: ${courseInfo.phone}`,
   ].join('\n');
 }
+
+export function formatCourseProgram(): string {
+  return [
+    '📚 Kurs dasturi',
+    '',
+    '• Videokuzatuv tizimining asosiy qismlari',
+    '• Analog va IP kameralarni tanlash va ulash',
+    '• DVR va NVR qurilmalarini sozlash',
+    '• Kabel, quvvat va tarmoq bilan ishlash',
+    '• Masofadan kuzatishni sozlash',
+    '• Nosozliklarni aniqlash va bartaraf etish',
+    '• Real uskunalarda amaliy mashg‘ulotlar',
+    '',
+    `Davomiyligi: ${courseInfo.duration}, ${courseInfo.lessons}.`,
+  ].join('\n');
+}
+
+export function formatPriceInfo(): string {
+  return [
+    '💳 Narx va to‘lov',
+    '',
+    `Kurs narxi: ${courseInfo.price}.`,
+    `Bo‘lib to‘lash: ${courseInfo.installment}.`,
+    '',
+    'Ro‘yxatdan o‘tish tugmasi orqali ariza qoldirishingiz mumkin.',
+  ].join('\n');
+}

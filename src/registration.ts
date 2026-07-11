@@ -6,7 +6,11 @@ import { deliverLeadWebhook } from './webhook.js';
 import type { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import type { BotContext, Lead } from './types.js';
 
-const registerButton = Markup.keyboard([['📝 Ro‘yxatdan o‘tish'], ['📞 Operator bilan bog‘lanish']]).resize();
+const registerButton = Markup.keyboard([
+  ['📚 Kurs dasturi', '💳 Narx va to‘lov'],
+  ['ℹ️ Kurs haqida'],
+  ['📝 Ro‘yxatdan o‘tish', '📞 Operator bilan bog‘lanish'],
+]).resize();
 const cancelButton = Markup.keyboard([['Bekor qilish']]).resize();
 const phoneButton = Markup.keyboard([[Markup.button.contactRequest('📱 Telefon raqamni yuborish')], ['Bekor qilish']]).resize();
 
