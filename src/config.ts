@@ -14,6 +14,7 @@ export interface AppConfig {
   dailyReportHour: number;
   operatorUsername: string;
   operatorPhone: string;
+  botDescription: string;
   isProduction: boolean;
   ai: AiConfig;
 }
@@ -61,6 +62,7 @@ export function loadConfig(): AppConfig {
     dailyReportHour: parseReportHour(process.env.DAILY_REPORT_HOUR),
     operatorUsername: process.env.OPERATOR_USERNAME || '@hr_wst',
     operatorPhone: process.env.OPERATOR_PHONE || '+998333011511',
+    botDescription: process.env.BOT_DESCRIPTION || 'WST Academy qabul boti. Videokuzatuv tizimlari boyicha 1 oylik offline kurs: 12 ta dars, real uskunalarda amaliy mashgulotlar. Kurs dasturi, narxi va royxatdan otish haqida malumot oling.',
     isProduction: process.env.NODE_ENV === 'production',
     ai: {
       enabled: parseBoolean(process.env.AI_ENABLED),

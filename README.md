@@ -26,6 +26,8 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - Local JSON storage with atomic writes
 - Optional n8n-compatible lead webhook delivery
 - Environment-based configuration; no bot token in code
+- Campaign-level Telegram Ads tracking via `/start ads_<campaign>` and `/ads_stats`
+- Bot destination description synchronized automatically on every startup
 
 ## Course details used by the bot
 

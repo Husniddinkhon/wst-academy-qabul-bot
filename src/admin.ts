@@ -54,6 +54,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '/setup_status — sozlamalar holati',
       '/health — bot sog‘liq tekshiruvi',
       '/ads_check — Telegram Ads tayyorlik tekshiruvi',
+      '/ads_stats [campaign] — reklama kampaniyalari bo‘yicha leadlar',
       '/leads_today — bugungi leadlar',
       '/last_leads — oxirgi 10 lead',
       '/hot_leads — hot leadlar',
@@ -85,6 +86,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       `AI_MODEL: ${envValue('AI_MODEL', 'not set')}`,
       `OPERATOR_USERNAME: ${envValue('OPERATOR_USERNAME', '@hr_wst')}`,
       `OPERATOR_PHONE: ${envValue('OPERATOR_PHONE', '+998333011511')}`,
+      `BOT_DESCRIPTION: ${yesNo(process.env.BOT_DESCRIPTION || 'default')}`,
       `DAILY_REPORT_ENABLED: ${envValue('DAILY_REPORT_ENABLED', 'true')}`,
       `DAILY_REPORT_HOUR: ${envValue('DAILY_REPORT_HOUR', '21')}`,
     ].join('\n'));
@@ -125,6 +127,24 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '',
       'Rasmli reklamadan oldin text-only safe versiyani reviewga yuboring.',
     ].join('\n'));
+  });
+
+  bot.command('ads_stats', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const campaignFilter = commandText(ctx).split(/\s+/)[1]?.trim();
+    const adLeads = (await store.all()).filter((lead) => lead.source === 'telegram_ads');
+    const filtered = campaignFilter ? adLeads.filter((lead) => lead.campaignId === campaignFilter) : adLeads;
+    const grouped = new Map<string, typeof filtered>();
+    for (const lead of filtered) {
+      const key = lead.campaignId || 'legacy';
+      grouped.set(key, [...(grouped.get(key) ?? []), lead]);
+    }
+    const lines = [...grouped.entries()].map(([campaign, leads]) => {
+      const withPhone = leads.filter((lead) => Boolean(lead.phone)).length;
+      const qualified = leads.filter((lead) => ['Hot', 'CallRequested', 'RegistrationCompleted', 'Paid'].includes(lead.status)).length;
+      return `${campaign}: ${leads.length} lead, ${withPhone} telefon, ${qualified} qualified`;
+    });
+    return ctx.reply(lines.length ? ['📣 Telegram Ads lead statistikasi', ...lines].join('\n') : 'Telegram Ads leadlari topilmadi.');
   });
 
   bot.command('leads_today', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList(await store.today(), 'Bugun hali lead yo‘q.')); });

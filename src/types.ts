@@ -35,6 +35,7 @@ export interface Lead {
   paymentStatus: string;
   preferredTime: string;
   notes?: string;
+  campaignId?: string;
 }
 
 export interface LeadDraft {
@@ -53,6 +54,7 @@ export interface BotSession extends Scenes.WizardSessionData {
     message: string;
   };
   source?: LeadSource;
+  campaignId?: string;
 }
 
 export interface FollowUpState {

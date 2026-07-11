@@ -21,7 +21,7 @@ declare module 'node:path' {
 
 declare module 'telegraf' {
   export class Telegraf<C = any> {
-    telegram: { setMyCommands(commands: Array<{ command: string; description: string }>): Promise<void>; sendMessage(chatId: number, text: string): Promise<void> };
+    telegram: { setMyDescription(description: string): Promise<void>; setMyCommands(commands: Array<{ command: string; description: string }>): Promise<void>; sendMessage(chatId: number, text: string): Promise<void> };
     constructor(token: string);
     use(middleware: unknown): void;
     start(handler: (ctx: C) => unknown): void;

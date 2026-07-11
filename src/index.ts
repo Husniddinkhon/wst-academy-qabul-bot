@@ -82,6 +82,7 @@ async function saveTelegramAdsLead(ctx: BotContext, store: JsonLeadStore, failur
     paymentOption: '',
     status: 'Warm',
     source: 'telegram_ads',
+    campaignId: ctx.session.campaignId,
     intent: 'telegram_ads',
     lastMessage: message,
     messages: [{ text: message, createdAt: now }],
@@ -108,7 +109,7 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
 
     if ((result.score === 'HOT' || result.score === 'WARM') && ctx.from) {
       const now = new Date().toISOString();
-      const saved = await store.upsert({ id: randomUUID(), createdAt: now, updatedAt: now, telegramId: ctx.from.id, username: ctx.from.username, firstName: ctx.from.first_name, lastName: ctx.from.last_name, fullName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || (result.score === 'HOT' ? 'Hot lead' : 'Warm lead'), phone: extractPhoneNumber(message) ?? '', city: '', age: '', workStatus: '', experience: '', goal: '', paymentOption: '', status: result.score === 'HOT' ? 'Hot' : 'Warm', source: ctx.session.source ?? 'ai_chat', intent: inferIntent(message), lastMessage: message, messages: [{ text: message, createdAt: now }], operatorNote: '', nextFollowUp: '', paymentStatus: '', preferredTime: '' });
+      const saved = await store.upsert({ id: randomUUID(), createdAt: now, updatedAt: now, telegramId: ctx.from.id, username: ctx.from.username, firstName: ctx.from.first_name, lastName: ctx.from.last_name, fullName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || (result.score === 'HOT' ? 'Hot lead' : 'Warm lead'), phone: extractPhoneNumber(message) ?? '', city: '', age: '', workStatus: '', experience: '', goal: '', paymentOption: '', status: result.score === 'HOT' ? 'Hot' : 'Warm', source: ctx.session.source ?? 'ai_chat', campaignId: ctx.session.campaignId, intent: inferIntent(message), lastMessage: message, messages: [{ text: message, createdAt: now }], operatorNote: '', nextFollowUp: '', paymentStatus: '', preferredTime: '' });
       await deliverLeadWebhook(config.leadWebhookUrl, failureStore, result.score === 'HOT' ? 'hot_lead' : (saved.created ? 'lead_created' : 'lead_updated'), saved.lead);
       if (result.score === 'HOT') await notifyHotLead(ctx, config.adminIds, {
         username: ctx.from?.username,
@@ -135,7 +136,9 @@ async function bootstrap(): Promise<void> {
   bot.use(stage.middleware());
 
   bot.start(async (ctx) => {
-    ctx.session.source = parseSource(ctx.message && 'text' in ctx.message ? ctx.message.text : undefined);
+    const tracking = parseTracking(ctx.message && 'text' in ctx.message ? ctx.message.text : undefined);
+    ctx.session.source = tracking.source;
+    ctx.session.campaignId = tracking.campaignId;
     if (ctx.session.source === 'telegram_ads') await saveTelegramAdsLead(ctx, store, failureStore, followUpStore, config.adminIds, config.leadWebhookUrl);
     await sendStart(ctx);
   });
@@ -204,6 +207,7 @@ async function bootstrap(): Promise<void> {
     console.error(`Bot error for update ${ctx.update.update_id}:`, error);
   });
 
+  await bot.telegram.setMyDescription(config.botDescription);
   await bot.telegram.setMyCommands([
     { command: 'start', description: 'Botni boshlash va kurs haqida maʼlumot' },
     { command: 'id', description: 'Telegram ID ni ko‘rish' },
@@ -211,6 +215,7 @@ async function bootstrap(): Promise<void> {
     { command: 'setup_status', description: 'Sozlamalar holatini tekshirish (admin)' },
     { command: 'health', description: 'Bot sog‘liq tekshiruvi (admin)' },
     { command: 'ads_check', description: 'Telegram Ads tayyorlik tekshiruvi (admin)' },
+    { command: 'ads_stats', description: 'Telegram Ads lead statistikasi (admin)' },
     { command: 'leads_today', description: 'Bugungi leadlar (admin)' },
     { command: 'last_leads', description: 'Oxirgi leadlar (admin)' },
     { command: 'hot_leads', description: 'Hot leadlar (admin)' },
@@ -246,15 +251,17 @@ bootstrap().catch((error) => {
   process.exit(1);
 });
 
-function parseSource(text: string | undefined): LeadSource {
+function parseTracking(text: string | undefined): { source: LeadSource; campaignId?: string } {
   const param = text?.split(/\s+/)[1];
-  if (param === 'ads' || param?.startsWith('ads_') || param?.startsWith('telegram_ads')) return 'telegram_ads';
-  if (param === 'channel') return 'channel';
-  if (param === 'organic') return 'organic';
-  if (param === 'registration') return 'registration';
-  if (param === 'ai_chat') return 'ai_chat';
-  if (param === 'call_request') return 'call_request';
-  return 'unknown';
+  if (param === 'ads' || param?.startsWith('ads_') || param?.startsWith('telegram_ads')) {
+    return { source: 'telegram_ads', campaignId: param === 'ads' ? 'legacy' : param };
+  }
+  if (param === 'channel') return { source: 'channel' };
+  if (param === 'organic') return { source: 'organic' };
+  if (param === 'registration') return { source: 'registration' };
+  if (param === 'ai_chat') return { source: 'ai_chat' };
+  if (param === 'call_request') return { source: 'call_request' };
+  return { source: 'unknown' };
 }
 
 function inferIntent(message: string): string {
