@@ -15,6 +15,8 @@ export interface AppConfig {
   operatorUsername: string;
   operatorPhone: string;
   botDescription: string;
+  channelChatId: string;
+  channelPostsFile: string;
   isProduction: boolean;
   ai: AiConfig;
 }
@@ -63,6 +65,8 @@ export function loadConfig(): AppConfig {
     operatorUsername: process.env.OPERATOR_USERNAME || '@hr_wst',
     operatorPhone: process.env.OPERATOR_PHONE || '+998333011511',
     botDescription: process.env.BOT_DESCRIPTION || 'WST Academy qabul boti. Videokuzatuv tizimlari boyicha 1 oylik offline kurs: 12 ta dars, real uskunalarda amaliy mashgulotlar. Kurs dasturi, narxi va royxatdan otish haqida malumot oling.',
+    channelChatId: process.env.CHANNEL_CHAT_ID || '-1004297032922',
+    channelPostsFile: process.env.CHANNEL_POSTS_FILE || './data/channel_posts.json',
     isProduction: process.env.NODE_ENV === 'production',
     ai: {
       enabled: parseBoolean(process.env.AI_ENABLED),

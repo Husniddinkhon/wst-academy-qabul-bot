@@ -10,6 +10,7 @@ import { deliverLeadWebhook } from './webhook.js';
 import type { BotContext, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
 import { startDailyReport } from './dailyReport.js';
+import { JsonChannelPostStore } from './channelPosts.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -129,6 +130,7 @@ async function bootstrap(): Promise<void> {
   const store = new JsonLeadStore(config.leadsFile);
   const failureStore = new JsonWebhookFailureStore(config.webhookFailedFile);
   const followUpStore = new JsonFollowUpStore(config.followupsFile);
+  const channelPosts = new JsonChannelPostStore(config.channelPostsFile);
   const bot = new Telegraf<BotContext>(config.botToken);
   const stage = new Scenes.Stage<BotContext>([createRegistrationScene(store, config.adminIds, config.leadWebhookUrl, failureStore, followUpStore)]);
 
@@ -150,7 +152,7 @@ async function bootstrap(): Promise<void> {
     await ctx.reply([`👨‍💼 Operator: ${courseInfo.operator}`, `📞 Telefon: ${courseInfo.phone}`, `📣 Kanal: ${courseInfo.channel}`].join('\n'), mainMenu());
   });
 
-  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl);
+  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId);
 
   bot.on('contact', async (ctx) => {
     const phone = ctx.message?.contact?.phone_number;
@@ -219,6 +221,9 @@ async function bootstrap(): Promise<void> {
     { command: 'health', description: 'Bot sog‘liq tekshiruvi (admin)' },
     { command: 'ads_check', description: 'Telegram Ads tayyorlik tekshiruvi (admin)' },
     { command: 'ads_stats', description: 'Telegram Ads lead statistikasi (admin)' },
+    { command: 'channel_draft', description: 'Kanal posti draftini yaratish (admin)' },
+    { command: 'channel_posts', description: 'Kanal postlari holati (admin)' },
+    { command: 'channel_publish', description: 'Draftni kanalga yuborish (admin)' },
     { command: 'leads_today', description: 'Bugungi leadlar (admin)' },
     { command: 'last_leads', description: 'Oxirgi leadlar (admin)' },
     { command: 'hot_leads', description: 'Hot leadlar (admin)' },
