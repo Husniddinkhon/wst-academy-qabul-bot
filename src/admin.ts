@@ -4,6 +4,7 @@ import type { JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { formatLead, formatLeadList } from './messages.js';
 import { deliverLeadWebhook, retryFailedWebhooks } from './webhook.js';
 import type { JsonChannelPostStore } from './channelPosts.js';
+import { publishChannelPost } from './channelPublisher.js';
 
 const HOT_LEAD_COOLDOWN_MS = 30 * 60 * 1000;
 const lastHotLeadAtByTelegramId = new Map<number, number>();
@@ -60,6 +61,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '/channel_draft <text> — kanal posti drafti',
       '/channel_posts — oxirgi kanal postlari',
       '/channel_publish <id> — draftni kanalga yuborish',
+      '/channel_retry <id> — xato bo‘lgan postni qayta yuborish',
       '/channel_report — subscriber, post va lead hisoboti',
       '/leads_today — bugungi leadlar',
       '/last_leads — oxirgi 10 lead',
@@ -159,7 +161,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     if (!(await guard(ctx))) return;
     const text = commandText(ctx).replace(/^\/channel_draft(?:@\w+)?\s*/i, '').trim();
     if (text.length < 20 || text.length > 4000) return ctx.reply('Post matni 20–4000 belgi bo‘lishi kerak.');
-    const post = await channelPosts.create(text);
+    const post = await channelPosts.create(text, undefined, ctx.from?.id);
     return ctx.reply(`Draft saqlandi: ${post.id}\n\n${post.text}\n\nYuborish: /channel_publish ${post.id}`);
   });
 
@@ -183,24 +185,22 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     return ctx.reply(['📣 Channel report', `Obunachilar: ${memberResponse.ok ? memberResponse.result : 'ERROR'}`, `Published postlar: ${published}`, `Channel leadlar: ${channelLeads}`, `Telegram Ads leadlar: ${adsLeads}`, `Active studentlar: ${activeStudents}`].join('\n'));
   });
 
-  bot.command('channel_publish', async (ctx) => {
+  const publish = async (ctx: BotContext, retryFailed: boolean): Promise<unknown> => {
     if (!(await guard(ctx))) return;
     const id = commandText(ctx).split(/\s+/)[1]?.trim();
-    const post = id ? await channelPosts.get(id) : undefined;
-    if (!post || post.status !== 'Draft') return ctx.reply('Publish qilinadigan Draft topilmadi.');
-    try {
-      const sent = post.photoFileId
-        ? await bot.telegram.sendPhoto(channelChatId, post.photoFileId, { caption: post.text })
-        : await bot.telegram.sendMessage(channelChatId, post.text);
-      await channelPosts.update(post.id, { status: 'Published', publishedAt: new Date().toISOString(), publishedMessageId: sent.message_id });
-      return ctx.reply(`Kanalga yuborildi: ${post.id}, message ${sent.message_id}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await channelPosts.update(post.id, { status: 'Failed', lastError: message });
-      console.error('Channel publish failed:', message);
-      return ctx.reply(`Kanalga yuborilmadi: ${message}`);
+    if (!id || !ctx.from?.id) return ctx.reply(`Format: /channel_${retryFailed ? 'retry' : 'publish'} <id>`);
+    const result = await publishChannelPost(channelPosts, bot.telegram, channelChatId, id, ctx.from.id, retryFailed);
+    if (result.ok) return ctx.reply(`Kanalga yuborildi: ${result.post.id}, message ${result.post.publishedMessageId}`);
+    if (result.reason === 'send_failed') {
+      console.error('Channel publish failed:', result.error);
+      return ctx.reply(`Kanalga yuborilmadi: ${result.error}\nQayta urinish: /channel_retry ${id}`);
     }
-  });
+    if (result.reason === 'not_found') return ctx.reply('Post topilmadi.');
+    return ctx.reply(`Post yuborib bo‘lmaydi. Hozirgi holat: ${result.post?.status ?? 'unknown'}.`);
+  };
+
+  bot.command('channel_publish', (ctx) => publish(ctx, false));
+  bot.command('channel_retry', (ctx) => publish(ctx, true));
 
   bot.command('leads_today', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList(await store.today(), 'Bugun hali lead yo‘q.')); });
   bot.command('last_leads', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList(await store.last(10), 'Hali lead yo‘q.')); });

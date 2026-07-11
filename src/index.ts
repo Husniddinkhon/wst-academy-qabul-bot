@@ -164,7 +164,7 @@ async function bootstrap(): Promise<void> {
     const photos = ctx.message?.photo ?? [];
     const photoFileId = photos[photos.length - 1]?.file_id;
     if (!photoFileId || text.length < 20 || text.length > 1024) return ctx.reply('Photo caption 20–1024 belgi bo‘lishi kerak.');
-    const post = await channelPosts.create(text, photoFileId);
+    const post = await channelPosts.create(text, photoFileId, ctx.from?.id);
     return ctx.reply(`Rasmli draft saqlandi: ${post.id}\nYuborish: /channel_publish ${post.id}`);
   });
 
@@ -238,6 +238,7 @@ async function bootstrap(): Promise<void> {
     { command: 'channel_draft', description: 'Kanal posti draftini yaratish (admin)' },
     { command: 'channel_posts', description: 'Kanal postlari holati (admin)' },
     { command: 'channel_publish', description: 'Draftni kanalga yuborish (admin)' },
+    { command: 'channel_retry', description: 'Xato kanal postini qayta yuborish (admin)' },
     { command: 'channel_report', description: 'Kanal obunachi va lead hisoboti (admin)' },
     { command: 'leads_today', description: 'Bugungi leadlar (admin)' },
     { command: 'last_leads', description: 'Oxirgi leadlar (admin)' },
