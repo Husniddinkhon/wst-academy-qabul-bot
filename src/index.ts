@@ -10,6 +10,7 @@ import { deliverLeadWebhook } from './webhook.js';
 import type { BotContext, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
 import { startDailyReport } from './dailyReport.js';
+import { PostgresFollowUpStore, PostgresLeadStore, PostgresStorage } from './postgres.js';
 import { JsonChannelPostStore } from './channelPosts.js';
 
 
@@ -129,9 +130,11 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
-  const store = new JsonLeadStore(config.leadsFile);
+  const postgres = config.databaseUrl ? new PostgresStorage(config.databaseUrl) : undefined;
+  if (postgres) await postgres.migrate(config.leadsFile, config.followupsFile);
+  const store = postgres ? new PostgresLeadStore(postgres) : new JsonLeadStore(config.leadsFile);
   const failureStore = new JsonWebhookFailureStore(config.webhookFailedFile);
-  const followUpStore = new JsonFollowUpStore(config.followupsFile);
+  const followUpStore = postgres ? new PostgresFollowUpStore(postgres) : new JsonFollowUpStore(config.followupsFile);
   const channelPosts = new JsonChannelPostStore(config.channelPostsFile);
   const bot = new Telegraf<BotContext>(config.botToken);
   const stage = new Scenes.Stage<BotContext>([createRegistrationScene(store, config.adminIds, config.leadWebhookUrl, failureStore, followUpStore)]);
@@ -267,6 +270,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(followUpTimer);
     if (dailyReportTimer) clearInterval(dailyReportTimer);
     bot.stop(signal);
+    if (postgres) await postgres.close();
     process.exit(0);
   };
 

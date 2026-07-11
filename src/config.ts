@@ -19,6 +19,7 @@ export interface AppConfig {
   channelPostsFile: string;
   isProduction: boolean;
   ai: AiConfig;
+  databaseUrl?: string;
 }
 
 function parseBoolean(value: string | undefined): boolean {
@@ -68,6 +69,7 @@ export function loadConfig(): AppConfig {
     channelChatId: process.env.CHANNEL_CHAT_ID || '-1004297032922',
     channelPostsFile: process.env.CHANNEL_POSTS_FILE || './data/channel_posts.json',
     isProduction: process.env.NODE_ENV === 'production',
+    databaseUrl: process.env.DATABASE_URL || undefined,
     ai: {
       enabled: parseBoolean(process.env.AI_ENABLED),
       provider: 'openai_compatible',
