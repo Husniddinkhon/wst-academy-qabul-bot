@@ -154,7 +154,7 @@ async function bootstrap(): Promise<void> {
     await ctx.reply([`👨‍💼 Operator: ${courseInfo.operator}`, `📞 Telefon: ${courseInfo.phone}`, `📣 Kanal: ${courseInfo.channel}`].join('\n'), mainMenu());
   });
 
-  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId);
+  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken);
 
   bot.on('photo', async (ctx) => {
     if (!isAdmin(ctx, config.adminIds)) return;
@@ -238,6 +238,7 @@ async function bootstrap(): Promise<void> {
     { command: 'channel_draft', description: 'Kanal posti draftini yaratish (admin)' },
     { command: 'channel_posts', description: 'Kanal postlari holati (admin)' },
     { command: 'channel_publish', description: 'Draftni kanalga yuborish (admin)' },
+    { command: 'channel_report', description: 'Kanal obunachi va lead hisoboti (admin)' },
     { command: 'leads_today', description: 'Bugungi leadlar (admin)' },
     { command: 'last_leads', description: 'Oxirgi leadlar (admin)' },
     { command: 'hot_leads', description: 'Hot leadlar (admin)' },

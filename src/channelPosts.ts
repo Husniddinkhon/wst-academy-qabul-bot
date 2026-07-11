@@ -27,6 +27,7 @@ export class JsonChannelPostStore {
   }
 
   async get(id: string): Promise<ChannelPost | undefined> { return (await this.read()).posts.find((post) => post.id === id); }
+  async all(): Promise<ChannelPost[]> { return (await this.read()).posts; }
   async last(limit = 10): Promise<ChannelPost[]> { return (await this.read()).posts.slice(-limit).reverse(); }
 
   async update(id: string, patch: Partial<ChannelPost>): Promise<ChannelPost | undefined> {

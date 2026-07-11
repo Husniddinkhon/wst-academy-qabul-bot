@@ -45,7 +45,7 @@ async function safeStoreStats(store: JsonLeadStore): Promise<string[]> {
   }
 }
 
-export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[], failureStore: JsonWebhookFailureStore, leadWebhookUrl: string | undefined, channelPosts: JsonChannelPostStore, channelChatId: string): void {
+export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[], failureStore: JsonWebhookFailureStore, leadWebhookUrl: string | undefined, channelPosts: JsonChannelPostStore, channelChatId: string, botToken: string): void {
   const guard = async (ctx: BotContext): Promise<boolean> => { if (isAdmin(ctx, adminIds)) return true; await ctx.reply('⛔ Bu buyruq faqat adminlar uchun.'); return false; };
   const commandText = (ctx: BotContext): string => ctx.message && 'text' in ctx.message && ctx.message.text ? ctx.message.text : '';
   bot.command('id', async (ctx) => ctx.reply(`Sizning Telegram ID: ${ctx.from?.id ?? 'aniqlanmadi'}`));
@@ -60,6 +60,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '/channel_draft <text> — kanal posti drafti',
       '/channel_posts — oxirgi kanal postlari',
       '/channel_publish <id> — draftni kanalga yuborish',
+      '/channel_report — subscriber, post va lead hisoboti',
       '/leads_today — bugungi leadlar',
       '/last_leads — oxirgi 10 lead',
       '/hot_leads — hot leadlar',
@@ -166,6 +167,20 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     if (!(await guard(ctx))) return;
     const posts = await channelPosts.last();
     return ctx.reply(posts.length ? posts.map((post) => `${post.id} | ${post.status} | ${post.text.slice(0, 80)}`).join('\n') : 'Kanal postlari yo‘q.');
+  });
+
+  bot.command('channel_report', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const [memberResponse, posts, leads] = await Promise.all([
+      fetch(`https://api.telegram.org/bot${botToken}/getChatMemberCount?chat_id=${encodeURIComponent(channelChatId)}`).then((response) => response.json()) as Promise<{ ok: boolean; result?: number }>,
+      channelPosts.all(),
+      store.all(),
+    ]);
+    const published = posts.filter((post) => post.status === 'Published').length;
+    const channelLeads = leads.filter((lead) => lead.source === 'channel').length;
+    const adsLeads = leads.filter((lead) => lead.source === 'telegram_ads').length;
+    const activeStudents = leads.filter((lead) => lead.studentStatus === 'Active').length;
+    return ctx.reply(['📣 Channel report', `Obunachilar: ${memberResponse.ok ? memberResponse.result : 'ERROR'}`, `Published postlar: ${published}`, `Channel leadlar: ${channelLeads}`, `Telegram Ads leadlar: ${adsLeads}`, `Active studentlar: ${activeStudents}`].join('\n'));
   });
 
   bot.command('channel_publish', async (ctx) => {
