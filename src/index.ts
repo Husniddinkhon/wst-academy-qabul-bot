@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
 import { courseInfo } from './course.js';
-import { notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
+import { notifyAdmins, notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
 import { answerWithAiAgent, extractPhoneNumber, getAiFallbackAnswer, getPhoneRequestAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic } from './aiAgent.js';
@@ -56,6 +56,46 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
   });
 }
 
+async function saveTelegramAdsLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, followUpStore: JsonFollowUpStore, adminIds: number[], leadWebhookUrl: string | undefined): Promise<void> {
+  const from = ctx.from;
+  if (!from) return;
+
+  const now = new Date().toISOString();
+  const message = ctx.message && 'text' in ctx.message ? (ctx.message.text ?? '/start ads') : '/start ads';
+  const lead: Lead = {
+    id: randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+    telegramId: from.id,
+    username: from.username,
+    firstName: from.first_name,
+    lastName: from.last_name,
+    fullName: [from.first_name, from.last_name].filter(Boolean).join(' ') || 'Telegram Ads lead',
+    phone: '',
+    age: '',
+    city: '',
+    workStatus: '',
+    experience: '',
+    preferredTime: '',
+    notes: 'User started the bot from Telegram Ads.',
+    goal: '',
+    paymentOption: '',
+    status: 'Warm',
+    source: 'telegram_ads',
+    intent: 'telegram_ads',
+    lastMessage: message,
+    messages: [{ text: message, createdAt: now }],
+    operatorNote: '',
+    nextFollowUp: '',
+    paymentStatus: '',
+  };
+
+  const saved = await store.upsert(lead);
+  await followUpStore.upsert({ telegramId: from.id, startedAt: saved.lead.createdAt, count: 0 });
+  await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead);
+  if (saved.created) await notifyAdmins(ctx, adminIds, saved.lead);
+}
+
 async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>, store: JsonLeadStore, failureStore: JsonWebhookFailureStore): Promise<void> {
   if (isUnrelatedTopic(message)) {
     await ctx.reply(getUnrelatedTopicAnswer(message), mainMenu());
@@ -94,7 +134,11 @@ async function bootstrap(): Promise<void> {
   bot.use(session());
   bot.use(stage.middleware());
 
-  bot.start(async (ctx) => { ctx.session.source = parseSource(ctx.message && 'text' in ctx.message ? ctx.message.text : undefined); await sendStart(ctx); });
+  bot.start(async (ctx) => {
+    ctx.session.source = parseSource(ctx.message && 'text' in ctx.message ? ctx.message.text : undefined);
+    if (ctx.session.source === 'telegram_ads') await saveTelegramAdsLead(ctx, store, failureStore, followUpStore, config.adminIds, config.leadWebhookUrl);
+    await sendStart(ctx);
+  });
   bot.hears('📝 Ro‘yxatdan o‘tish', (ctx) => ctx.scene.enter(REGISTRATION_SCENE_ID));
   bot.hears('📞 Operator bilan bog‘lanish', async (ctx) => {
     await ctx.reply([`👨‍💼 Operator: ${courseInfo.operator}`, `📞 Telefon: ${courseInfo.phone}`, `📣 Kanal: ${courseInfo.channel}`].join('\n'), mainMenu());
@@ -204,7 +248,7 @@ bootstrap().catch((error) => {
 
 function parseSource(text: string | undefined): LeadSource {
   const param = text?.split(/\s+/)[1];
-  if (param === 'ads') return 'telegram_ads';
+  if (param === 'ads' || param?.startsWith('ads_') || param?.startsWith('telegram_ads')) return 'telegram_ads';
   if (param === 'channel') return 'channel';
   if (param === 'organic') return 'organic';
   if (param === 'registration') return 'registration';
