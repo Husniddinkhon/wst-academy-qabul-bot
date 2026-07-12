@@ -7,6 +7,8 @@ export const courseInfo = {
   duration: '1 oy',
   lessons: '12 ta dars',
   format: 'offline amaliy kurs',
+  schedule: 'haftasiga 3 kun; aniq kun va vaqt guruh shakllanganda operator bilan kelishiladi',
+  location: process.env.COURSE_LOCATION || 'aniq o‘quv manzili guruh tanlanganda operator tomonidan tasdiqlanadi',
   price: '2 500 000 so‘m',
   installment: '1 500 000 so‘m avval, qolgan qismi 1-hafta oxirigacha',
   benefits: 'sertifikat va ishga yo‘naltirish bo‘yicha maslahat',
@@ -23,6 +25,8 @@ export function formatCourseIntro(): string {
     `• Davomiyligi: ${courseInfo.duration}`,
     `• Darslar: ${courseInfo.lessons}`,
     `• Format: ${courseInfo.format}`,
+    `• Jadval: ${courseInfo.schedule}`,
+    `• Manzil: ${courseInfo.location}`,
     `• Narx: ${courseInfo.price}`,
     `• Bo‘lib to‘lash: ${courseInfo.installment}`,
     `• Yakunda: ${courseInfo.benefits}`,
@@ -32,6 +36,33 @@ export function formatCourseIntro(): string {
     `📣 Kanal: ${courseInfo.channel}`,
     `👨‍💼 Operator: ${courseInfo.operator}`,
     `📞 Telefon: ${courseInfo.phone}`,
+    '',
+    '🔐 Kurs ma’lumotlarini ko‘rish uchun shaxsiy ma’lumot yuborish shart emas. Ro‘yxatdan o‘tish ixtiyoriy.',
+  ].join('\n');
+}
+
+export function formatLocationAndSchedule(): string {
+  return [
+    '📍 Manzil va jadval',
+    '',
+    `Format: ${courseInfo.format}.`,
+    `Jadval: ${courseInfo.schedule}.`,
+    `Manzil: ${courseInfo.location}.`,
+    '',
+    `Aniqlashtirish uchun operator: ${courseInfo.operator}`,
+    `Telefon: ${courseInfo.phone}`,
+  ].join('\n');
+}
+
+export function formatPrivacyInfo(): string {
+  return [
+    '🔐 Maxfiylik va ma’lumotlardan foydalanish',
+    '',
+    'Kurs haqida ma’lumot olish uchun ism yoki telefon yuborish shart emas.',
+    'Ro‘yxatdan o‘tish ixtiyoriy. Arizada ism-familiya, telefon, yosh, hudud, tajriba va qulay dars vaqti so‘raladi.',
+    'Bu ma’lumotlar faqat arizani ko‘rib chiqish, siz bilan bog‘lanish va mos guruhni taklif qilish uchun ishlatiladi.',
+    'Ma’lumot yubormasdan menyu orqali kurs dasturi, narx, jadval va aloqa ma’lumotlarini ko‘rishingiz mumkin.',
+    `Savol yoki ma’lumotni yangilash bo‘yicha operator: ${courseInfo.operator}, ${courseInfo.phone}.`,
   ].join('\n');
 }
 

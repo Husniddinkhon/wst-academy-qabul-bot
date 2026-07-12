@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
-import { courseInfo, formatCourseIntro, formatCourseProgram, formatPriceInfo } from './course.js';
+import { courseInfo, formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
 import { isAdmin, notifyAdmins, notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
@@ -153,6 +153,8 @@ async function bootstrap(): Promise<void> {
   bot.hears('📚 Kurs dasturi', (ctx) => ctx.reply(formatCourseProgram(), mainMenu()));
   bot.hears('💳 Narx va to‘lov', (ctx) => ctx.reply(formatPriceInfo(), mainMenu()));
   bot.hears('ℹ️ Kurs haqida', (ctx) => ctx.reply(formatCourseIntro(), mainMenu()));
+  bot.hears('📍 Manzil va jadval', (ctx) => ctx.reply(formatLocationAndSchedule(), mainMenu()));
+  bot.hears('🔐 Maxfiylik', (ctx) => ctx.reply(formatPrivacyInfo(), mainMenu()));
   bot.hears('📞 Operator bilan bog‘lanish', async (ctx) => {
     await ctx.reply([`👨‍💼 Operator: ${courseInfo.operator}`, `📞 Telefon: ${courseInfo.phone}`, `📣 Kanal: ${courseInfo.channel}`].join('\n'), mainMenu());
   });

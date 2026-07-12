@@ -9,6 +9,7 @@ import type { BotContext, Lead } from './types.js';
 const registerButton = Markup.keyboard([
   ['📚 Kurs dasturi', '💳 Narx va to‘lov'],
   ['ℹ️ Kurs haqida'],
+  ['📍 Manzil va jadval', '🔐 Maxfiylik'],
   ['📝 Ro‘yxatdan o‘tish', '📞 Operator bilan bog‘lanish'],
 ]).resize();
 const cancelButton = Markup.keyboard([['Bekor qilish']]).resize();
