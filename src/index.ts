@@ -232,6 +232,7 @@ async function bootstrap(): Promise<void> {
   });
 
   await bot.telegram.setMyDescription(config.botDescription);
+  await bot.telegram.setMyShortDescription(config.botShortDescription);
   const adminCommands = [
     { command: 'start', description: 'Botni boshlash va kurs haqida maʼlumot' },
     { command: 'id', description: 'Telegram ID ni ko‘rish' },

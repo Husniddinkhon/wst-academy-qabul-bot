@@ -21,7 +21,7 @@ declare module 'node:path' {
 
 declare module 'telegraf' {
   export class Telegraf<C = any> {
-    telegram: { setMyDescription(description: string): Promise<void>; setMyCommands(commands: Array<{ command: string; description: string }>, extra?: { scope: { type: 'default' } | { type: 'chat'; chat_id: number } }): Promise<void>; sendMessage(chatId: number | string, text: string): Promise<{ message_id: number }>; sendPhoto(chatId: number | string, photo: string, extra?: { caption?: string }): Promise<{ message_id: number }> };
+    telegram: { setMyDescription(description: string): Promise<void>; setMyShortDescription(shortDescription: string): Promise<void>; setMyCommands(commands: Array<{ command: string; description: string }>, extra?: { scope: { type: 'default' } | { type: 'chat'; chat_id: number } }): Promise<void>; sendMessage(chatId: number | string, text: string): Promise<{ message_id: number }>; sendPhoto(chatId: number | string, photo: string, extra?: { caption?: string }): Promise<{ message_id: number }> };
     constructor(token: string);
     use(middleware: unknown): void;
     start(handler: (ctx: C) => unknown): void;
