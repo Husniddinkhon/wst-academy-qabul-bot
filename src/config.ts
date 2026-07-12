@@ -66,7 +66,7 @@ export function loadConfig(): AppConfig {
     dailyReportHour: parseReportHour(process.env.DAILY_REPORT_HOUR),
     operatorUsername: process.env.OPERATOR_USERNAME || '@hr_wst',
     operatorPhone: process.env.OPERATOR_PHONE || '+998333011511',
-    botDescription: process.env.BOT_DESCRIPTION || 'WST Academy qabul boti. Videokuzatuv tizimlari boyicha 1 oylik offline kurs: 12 ta dars, real uskunalarda amaliy mashgulotlar. Kurs dasturi, narxi va royxatdan otish haqida malumot oling.',
+    botDescription: process.env.BOT_DESCRIPTION || 'WST Academy videokuzatuv kursi: 1 oy, 12 dars, offline real uskunalarda amaliyot. Manzil: Toshkent shahri, Arnasoy ko‘chasi, 33-uy. Keyingi guruh 2026-yil 4-avgustga rejalashtirilgan; qabulga qarab 1–2 kun siljishi mumkin. Darslar 10:00–16:00 oralig‘ida, kunlar guruh talabiga qarab belgilanadi.',
     botShortDescription: process.env.BOT_SHORT_DESCRIPTION || 'WST Academy: videokuzatuv bo‘yicha 1 oy, 12 dars. Offline, real uskunalarda amaliy kurs.',
     channelChatId: process.env.CHANNEL_CHAT_ID || '-1004297032922',
     channelPostsFile: process.env.CHANNEL_POSTS_FILE || './data/channel_posts.json',

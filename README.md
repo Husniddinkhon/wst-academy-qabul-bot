@@ -37,6 +37,10 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - Duration: 1 month
 - Lessons: 12 lessons
 - Format: offline practical course
+- Venue: Toshkent shahri, Arnasoy ko‘chasi, 33-uy
+- Next group planned start: 2026-08-04; it may shift by 1–2 days depending on enrollment
+- Lesson weekdays are selected based on group demand
+- Lessons are scheduled within 10:00–16:00; this is not a promise of a continuous six-hour class
 - Price: 2 500 000 so‘m
 - Installment: 1 500 000 so‘m first, remaining by end of first week
 - Certificate and job guidance are included

@@ -7,8 +7,11 @@ export const courseInfo = {
   duration: '1 oy',
   lessons: '12 ta dars',
   format: 'offline amaliy kurs',
-  schedule: 'haftasiga 3 kun; aniq kun va vaqt guruh shakllanganda operator bilan kelishiladi',
-  location: process.env.COURSE_LOCATION || 'aniq o‘quv manzili guruh tanlanganda operator tomonidan tasdiqlanadi',
+  location: process.env.COURSE_LOCATION || 'Toshkent shahri, Arnasoy ko‘chasi, 33-uy',
+  plannedStart: process.env.COURSE_START_DATE || '2026-08-04',
+  startNotice: 'Keyingi guruh 2026-yil 4-avgustga rejalashtirilgan. Qabul holatiga qarab boshlanish sanasi 1–2 kun siljishi mumkin.',
+  schedule: 'Dars kunlari guruh talabiga qarab belgilanadi; hozircha qat’iy hafta kunlari va’da qilinmaydi.',
+  lessonWindow: 'Darslar 10:00–16:00 oralig‘ida jadvalga qo‘yiladi. Bu 6 soat uzluksiz dars degani emas.',
   price: '2 500 000 so‘m',
   installment: '1 500 000 so‘m avval, qolgan qismi 1-hafta oxirigacha',
   benefits: 'sertifikat va ishga yo‘naltirish bo‘yicha maslahat',
@@ -19,35 +22,39 @@ export const courseInfo = {
 
 export function formatCourseIntro(): string {
   return [
-    `👋 Assalomu alaykum! ${courseInfo.title}ga qabul botiga xush kelibsiz.`,
+    `${courseInfo.title}ga xush kelibsiz.`,
     '',
-    '📌 Kurs haqida:',
+    'Kurs haqida:',
     `• Davomiyligi: ${courseInfo.duration}`,
     `• Darslar: ${courseInfo.lessons}`,
-    `• Format: ${courseInfo.format}`,
-    `• Jadval: ${courseInfo.schedule}`,
+    `• Format: ${courseInfo.format}, real uskunalarda amaliy mashg‘ulotlar`,
+    `• Rejalashtirilgan start: ${courseInfo.plannedStart}`,
+    `• Sana izohi: ${courseInfo.startNotice}`,
+    `• Dars kunlari: ${courseInfo.schedule}`,
+    `• Vaqt oralig‘i: ${courseInfo.lessonWindow}`,
     `• Manzil: ${courseInfo.location}`,
     `• Narx: ${courseInfo.price}`,
     `• Bo‘lib to‘lash: ${courseInfo.installment}`,
     `• Yakunda: ${courseInfo.benefits}`,
     '',
-    '⚠️ Eslatma: ishga joylashish kafolatlanmaydi, lekin yo‘nalish va tayyorgarlik bo‘yicha yordam beriladi.',
+    'Ishga joylashish kafolatlanmaydi, lekin yo‘nalish va tayyorgarlik bo‘yicha yordam beriladi.',
+    `Operator: ${courseInfo.operator}`,
+    `Telefon: ${courseInfo.phone}`,
     '',
-    `📣 Kanal: ${courseInfo.channel}`,
-    `👨‍💼 Operator: ${courseInfo.operator}`,
-    `📞 Telefon: ${courseInfo.phone}`,
-    '',
-    '🔐 Kurs ma’lumotlarini ko‘rish uchun shaxsiy ma’lumot yuborish shart emas. Ro‘yxatdan o‘tish ixtiyoriy.',
+    'Kurs ma’lumotlarini ko‘rish uchun shaxsiy ma’lumot yuborish shart emas. Ro‘yxatdan o‘tish ixtiyoriy.',
   ].join('\n');
 }
 
 export function formatLocationAndSchedule(): string {
   return [
-    '📍 Manzil va jadval',
+    'Manzil va jadval',
     '',
-    `Format: ${courseInfo.format}.`,
-    `Jadval: ${courseInfo.schedule}.`,
     `Manzil: ${courseInfo.location}.`,
+    `Rejalashtirilgan start: ${courseInfo.plannedStart}.`,
+    courseInfo.startNotice,
+    courseInfo.schedule,
+    courseInfo.lessonWindow,
+    `Format: ${courseInfo.format}.`,
     '',
     `Aniqlashtirish uchun operator: ${courseInfo.operator}`,
     `Telefon: ${courseInfo.phone}`,
@@ -56,7 +63,7 @@ export function formatLocationAndSchedule(): string {
 
 export function formatPrivacyInfo(): string {
   return [
-    '🔐 Maxfiylik va ma’lumotlardan foydalanish',
+    'Maxfiylik va ma’lumotlardan foydalanish',
     '',
     'Kurs haqida ma’lumot olish uchun ism yoki telefon yuborish shart emas.',
     'Ro‘yxatdan o‘tish ixtiyoriy. Arizada ism-familiya, telefon, yosh, hudud, tajriba va qulay dars vaqti so‘raladi.',
@@ -68,27 +75,18 @@ export function formatPrivacyInfo(): string {
 
 export function formatCourseProgram(): string {
   return [
-    '📚 Kurs dasturi',
-    '',
+    'Kurs dasturi', '',
     '• Videokuzatuv tizimining asosiy qismlari',
     '• Analog va IP kameralarni tanlash va ulash',
     '• DVR va NVR qurilmalarini sozlash',
     '• Kabel, quvvat va tarmoq bilan ishlash',
     '• Masofadan kuzatishni sozlash',
     '• Nosozliklarni aniqlash va bartaraf etish',
-    '• Real uskunalarda amaliy mashg‘ulotlar',
-    '',
+    '• Real uskunalarda amaliy mashg‘ulotlar', '',
     `Davomiyligi: ${courseInfo.duration}, ${courseInfo.lessons}.`,
   ].join('\n');
 }
 
 export function formatPriceInfo(): string {
-  return [
-    '💳 Narx va to‘lov',
-    '',
-    `Kurs narxi: ${courseInfo.price}.`,
-    `Bo‘lib to‘lash: ${courseInfo.installment}.`,
-    '',
-    'Ro‘yxatdan o‘tish tugmasi orqali ariza qoldirishingiz mumkin.',
-  ].join('\n');
+  return ['Narx va to‘lov', '', `Kurs narxi: ${courseInfo.price}.`, `Bo‘lib to‘lash: ${courseInfo.installment}.`, '', 'Ro‘yxatdan o‘tish tugmasi orqali ixtiyoriy ariza qoldirishingiz mumkin.'].join('\n');
 }
