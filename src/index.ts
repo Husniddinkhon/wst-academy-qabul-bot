@@ -2,16 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
 import { courseInfo, formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
-import { isAdmin, notifyAdmins, notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
+import { isAdmin, notifyCallRequestLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
-import { answerWithAiAgent, extractPhoneNumber, getAiFallbackAnswer, getPhoneRequestAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic } from './aiAgent.js';
+import { answerWithAiAgent, extractPhoneNumber, getPhoneRequestAnswer, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic } from './aiAgent.js';
 import { deliverLeadWebhook } from './webhook.js';
 import type { BotContext, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
 import { startDailyReport } from './dailyReport.js';
 import { PostgresFollowUpStore, PostgresLeadStore, PostgresStorage } from './postgres.js';
 import { JsonChannelPostStore } from './channelPosts.js';
+import { BACK_BUTTON, CALCULATOR_BUTTON, LESSON_BUTTON, MENU_BUTTON, NEXT_BUTTON, QUIZ, QUIZ_BUTTON, lessonKeyboard, lessonText, quizKeyboard, quizText, startCalculator, startLesson, startQuiz, storageTerabytes, validateCalculatorValue } from './learning.js';
+import { parseStartAttribution, resetSessionForStart } from './startFlow.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -37,7 +39,8 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
     goal: '',
     paymentOption: '',
     status: 'CallRequested',
-    source: 'call_request',
+    source: ctx.session.source === 'telegram_ads' ? 'telegram_ads' : 'call_request',
+    campaignId: ctx.session.campaignId,
     intent: 'call request',
     lastMessage: message,
     messages: [{ text: message, createdAt: new Date().toISOString() }],
@@ -58,48 +61,7 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
   });
 }
 
-async function saveTelegramAdsLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, followUpStore: JsonFollowUpStore, adminIds: number[], leadWebhookUrl: string | undefined): Promise<void> {
-  const from = ctx.from;
-  if (!from) return;
-
-  const now = new Date().toISOString();
-  const message = ctx.message && 'text' in ctx.message ? (ctx.message.text ?? '/start ads') : '/start ads';
-  const lead: Lead = {
-    id: randomUUID(),
-    createdAt: now,
-    updatedAt: now,
-    telegramId: from.id,
-    username: from.username,
-    firstName: from.first_name,
-    lastName: from.last_name,
-    fullName: [from.first_name, from.last_name].filter(Boolean).join(' ') || 'Telegram Ads lead',
-    phone: '',
-    age: '',
-    city: '',
-    workStatus: '',
-    experience: '',
-    preferredTime: '',
-    notes: 'User started the bot from Telegram Ads.',
-    goal: '',
-    paymentOption: '',
-    status: 'Warm',
-    source: 'telegram_ads',
-    campaignId: ctx.session.campaignId,
-    intent: 'telegram_ads',
-    lastMessage: message,
-    messages: [{ text: message, createdAt: now }],
-    operatorNote: '',
-    nextFollowUp: '',
-    paymentStatus: '',
-  };
-
-  const saved = await store.upsert(lead);
-  await followUpStore.upsert({ telegramId: from.id, startedAt: saved.lead.createdAt, count: 0 });
-  await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead);
-  if (saved.created) await notifyAdmins(ctx, adminIds, saved.lead);
-}
-
-async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, followUpStore: JsonFollowUpStore): Promise<void> {
+async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>): Promise<void> {
   if (isUnrelatedTopic(message)) {
     await ctx.reply(getUnrelatedTopicAnswer(message), mainMenu());
     return;
@@ -109,23 +71,63 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
     const result = await answerWithAiAgent(message, config.ai);
     await ctx.reply(result.answer, mainMenu());
 
-    if ((result.score === 'HOT' || result.score === 'WARM') && ctx.from) {
-      const now = new Date().toISOString();
-      const existing = await store.getByTelegramId(ctx.from.id);
-      const saved = await store.upsert({ id: randomUUID(), createdAt: now, updatedAt: now, telegramId: ctx.from.id, username: ctx.from.username, firstName: ctx.from.first_name, lastName: ctx.from.last_name, fullName: [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ') || (result.score === 'HOT' ? 'Hot lead' : 'Warm lead'), phone: extractPhoneNumber(message) ?? '', city: '', age: '', workStatus: '', experience: '', goal: '', paymentOption: '', status: result.score === 'HOT' ? 'Hot' : 'Warm', source: ctx.session.source ?? 'ai_chat', campaignId: ctx.session.campaignId, agentActionCount: (existing?.agentActionCount ?? 0) + 1, lastAgentAction: `AI reply (${result.score})`, lastAgentAt: now, intent: inferIntent(message), lastMessage: message, messages: [{ text: message, createdAt: now }], operatorNote: '', nextFollowUp: '', paymentStatus: '', preferredTime: '' });
-      await followUpStore.ensure({ telegramId: ctx.from.id, startedAt: saved.lead.createdAt, count: 0 });
-      await deliverLeadWebhook(config.leadWebhookUrl, failureStore, result.score === 'HOT' ? 'hot_lead' : (saved.created ? 'lead_created' : 'lead_updated'), saved.lead);
-      if (result.score === 'HOT') await notifyHotLead(ctx, config.adminIds, {
-        username: ctx.from?.username,
-        telegramId: ctx.from?.id,
-        message,
-        reason: result.reason,
-      });
-    }
   } catch (error) {
     console.error('AI agent failed:', error instanceof Error ? error.message : error);
-    await ctx.reply(getAiFallbackAnswer(message), mainMenu());
+    await ctx.reply(getTruthfulFallbackAnswer(message), mainMenu());
   }
+}
+
+async function cancelActiveFlow(ctx: BotContext): Promise<void> {
+  ctx.session.leadDraft = undefined;
+  ctx.session.waitingForCallPhone = undefined;
+  ctx.session.lessonIndex = undefined;
+  ctx.session.quizIndex = undefined;
+  ctx.session.quizScore = undefined;
+  ctx.session.calculator = undefined;
+  if (ctx.scene.current) await ctx.scene.leave();
+  await ctx.reply('Joriy amal bekor qilindi. Asosiy menyu ochildi.', mainMenu());
+}
+
+async function handleLearningText(ctx: BotContext, message: string): Promise<boolean> {
+  if (message === MENU_BUTTON) { await cancelActiveFlow(ctx); return true; }
+  if (ctx.session.lessonIndex !== undefined) {
+    if (message !== NEXT_BUTTON && message !== BACK_BUTTON) { await ctx.reply('Mini-darsni davom ettirish uchun tugmalardan foydalaning.', lessonKeyboard(ctx.session.lessonIndex)); return true; }
+    const delta = message === NEXT_BUTTON ? 1 : -1;
+    const index = Math.max(0, Math.min(2, ctx.session.lessonIndex + delta));
+    ctx.session.lessonIndex = index;
+    await ctx.reply(lessonText(index), lessonKeyboard(index));
+    return true;
+  }
+  if (ctx.session.quizIndex !== undefined) {
+    const index = ctx.session.quizIndex;
+    const answer = QUIZ[index].options.indexOf(message as never);
+    if (answer < 0) { await ctx.reply('Javob variantlaridan birini tanlang.', quizKeyboard(index)); return true; }
+    const correct = answer === QUIZ[index].correct;
+    ctx.session.quizScore = (ctx.session.quizScore ?? 0) + (correct ? 1 : 0);
+    await ctx.reply(`${correct ? 'To‘g‘ri.' : 'Noto‘g‘ri.'} ${QUIZ[index].explanation}`);
+    if (index === QUIZ.length - 1) {
+      const score = ctx.session.quizScore;
+      ctx.session.quizIndex = undefined;
+      ctx.session.quizScore = undefined;
+      await ctx.reply(`Natija: ${score}/5. Javoblaringiz saqlanmadi.`, mainMenu());
+    } else {
+      ctx.session.quizIndex = index + 1;
+      await ctx.reply(quizText(index + 1), quizKeyboard(index + 1));
+    }
+    return true;
+  }
+  const calculator = ctx.session.calculator;
+  if (calculator) {
+    const value = Number(message.replace(',', '.'));
+    try { validateCalculatorValue(calculator.step, value); } catch { await ctx.reply(calculator.step === 'cameras' ? '1–128 oralig‘ida butun kamera sonini kiriting.' : calculator.step === 'bitrate' ? '0.25–32 oralig‘ida bitrate kiriting.' : '1–365 oralig‘ida butun kun kiriting.'); return true; }
+    if (calculator.step === 'cameras') { ctx.session.calculator = { step: 'bitrate', cameras: value }; await ctx.reply('Har bir kamera bitrate qiymatini Mbps’da kiriting (0.25–32). Masalan: 4'); return true; }
+    if (calculator.step === 'bitrate') { ctx.session.calculator = { step: 'days', cameras: calculator.cameras, bitrate: value }; await ctx.reply('Yozuv saqlanadigan kunlar sonini kiriting (1–365):'); return true; }
+    const tb = storageTerabytes(calculator.cameras!, calculator.bitrate!, value);
+    ctx.session.calculator = undefined;
+    await ctx.reply(`Taxminiy xotira: ${tb.toFixed(2)} TB. Hisob doimiy bitrate asosida; real hajm kodek, harakat va sozlamalarga qarab farq qiladi.`, mainMenu());
+    return true;
+  }
+  return false;
 }
 
 async function bootstrap(): Promise<void> {
@@ -143,19 +145,26 @@ async function bootstrap(): Promise<void> {
   bot.use(stage.middleware());
 
   bot.start(async (ctx) => {
-    const tracking = parseTracking(ctx.message && 'text' in ctx.message ? ctx.message.text : undefined);
-    ctx.session.source = tracking.source;
-    ctx.session.campaignId = tracking.campaignId;
-    if (ctx.session.source === 'telegram_ads') await saveTelegramAdsLead(ctx, store, failureStore, followUpStore, config.adminIds, config.leadWebhookUrl);
+    if (ctx.scene.current) await ctx.scene.leave();
+    const tracking = parseStartAttribution(ctx.message && 'text' in ctx.message ? ctx.message.text : undefined);
+    resetSessionForStart(ctx.session, tracking);
     await sendStart(ctx);
   });
-  bot.hears('📝 Ro‘yxatdan o‘tish', (ctx) => ctx.scene.enter(REGISTRATION_SCENE_ID));
-  bot.hears('📚 Kurs dasturi', (ctx) => ctx.reply(formatCourseProgram(), mainMenu()));
-  bot.hears('💳 Narx va to‘lov', (ctx) => ctx.reply(formatPriceInfo(), mainMenu()));
-  bot.hears('ℹ️ Kurs haqida', (ctx) => ctx.reply(formatCourseIntro(), mainMenu()));
-  bot.hears('📍 Manzil va jadval', (ctx) => ctx.reply(formatLocationAndSchedule(), mainMenu()));
-  bot.hears('🔐 Maxfiylik', (ctx) => ctx.reply(formatPrivacyInfo(), mainMenu()));
-  bot.hears('📞 Operator bilan bog‘lanish', async (ctx) => {
+  bot.command('help', (ctx) => ctx.reply('Bepul funksiyalar: /lesson, /quiz, /calculator. /cancel joriy amalni bekor qiladi. Kurs ma’lumotlari va ro‘yxatdan o‘tish menyuda mavjud.', mainMenu()));
+  bot.command('lesson', startLesson);
+  bot.command('quiz', startQuiz);
+  bot.command('calculator', startCalculator);
+  bot.command('cancel', cancelActiveFlow);
+  bot.hears(LESSON_BUTTON, startLesson);
+  bot.hears(QUIZ_BUTTON, startQuiz);
+  bot.hears(CALCULATOR_BUTTON, startCalculator);
+  bot.hears('Ro‘yxatdan o‘tish', (ctx) => ctx.scene.enter(REGISTRATION_SCENE_ID));
+  bot.hears('Kurs dasturi', (ctx) => ctx.reply(formatCourseProgram(), mainMenu()));
+  bot.hears('Narx va to‘lov', (ctx) => ctx.reply(formatPriceInfo(), mainMenu()));
+  bot.hears('Kurs haqida', (ctx) => ctx.reply(formatCourseIntro(), mainMenu()));
+  bot.hears('Manzil va jadval', (ctx) => ctx.reply(formatLocationAndSchedule(), mainMenu()));
+  bot.hears('Maxfiylik', (ctx) => ctx.reply(formatPrivacyInfo(), mainMenu()));
+  bot.hears('Operator bilan bog‘lanish', async (ctx) => {
     await ctx.reply([`👨‍💼 Operator: ${courseInfo.operator}`, `📞 Telefon: ${courseInfo.phone}`, `📣 Kanal: ${courseInfo.channel}`].join('\n'), mainMenu());
   });
 
@@ -187,6 +196,7 @@ async function bootstrap(): Promise<void> {
     const message = ctx.message?.text?.trim();
 
     if (!message || message.startsWith('/') || ctx.scene.current) return;
+    if (await handleLearningText(ctx, message)) return;
 
     if (ctx.session.waitingForCallPhone) {
       const phone = extractPhoneNumber(message);
@@ -199,7 +209,7 @@ async function bootstrap(): Promise<void> {
         }
 
         ctx.session.waitingForCallPhone = undefined;
-        await answerSalesAgent(ctx, message, config, store, failureStore, followUpStore);
+        await answerSalesAgent(ctx, message, config);
         return;
       }
 
@@ -224,7 +234,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    await answerSalesAgent(ctx, message, config, store, failureStore, followUpStore);
+    await answerSalesAgent(ctx, message, config);
   });
 
   bot.catch((error, ctx) => {
@@ -233,6 +243,14 @@ async function bootstrap(): Promise<void> {
 
   await bot.telegram.setMyDescription(config.botDescription);
   await bot.telegram.setMyShortDescription(config.botShortDescription);
+  const publicCommands = [
+    { command: 'start', description: 'Asosiy menyuni ochish' },
+    { command: 'help', description: 'Bot imkoniyatlari' },
+    { command: 'lesson', description: 'Bepul CCTV mini-dars' },
+    { command: 'quiz', description: 'CCTV bilim testi' },
+    { command: 'calculator', description: 'Kamera xotirasini hisoblash' },
+    { command: 'cancel', description: 'Joriy amalni bekor qilish' },
+  ];
   const adminCommands = [
     { command: 'start', description: 'Botni boshlash va kurs haqida maʼlumot' },
     { command: 'id', description: 'Telegram ID ni ko‘rish' },
@@ -259,8 +277,8 @@ async function bootstrap(): Promise<void> {
     { command: 'set_status', description: 'Lead statusini yangilash (admin)' },
     { command: 'operator_note', description: 'Leadga operator izohi (admin)' },
   ];
-  await bot.telegram.setMyCommands([adminCommands[0]], { scope: { type: 'default' } });
-  await Promise.all(config.adminIds.map((chatId) => bot.telegram.setMyCommands(adminCommands, { scope: { type: 'chat', chat_id: chatId } })));
+  await bot.telegram.setMyCommands(publicCommands, { scope: { type: 'default' } });
+  await Promise.all(config.adminIds.map((chatId) => bot.telegram.setMyCommands([...publicCommands, ...adminCommands.slice(1)], { scope: { type: 'chat', chat_id: chatId } })));
 
   const followUpTimer = startFollowUpAutomation(bot, store, followUpStore);
   const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);

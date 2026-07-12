@@ -151,8 +151,10 @@ export async function answerWithAiAgent(message: string, config: AiConfig): Prom
   return { answer, ...scored };
 }
 
-export function getAiFallbackAnswer(message = ''): string {
-  return hasCyrillic(message) ? `Саволингиз қабул қилинди. Операторимиз сиз билан боғланади: ${courseInfo.operator}` : `Savolingiz qabul qilindi. Operatorimiz siz bilan bog‘lanadi: ${courseInfo.operator}`;
+export function getTruthfulFallbackAnswer(message = ''): string {
+  return hasCyrillic(message)
+    ? 'AI жавоби ҳозир мавжуд эмас. Курс маълумотлари ва бепул CCTV дарси менюда очиқ; бу хабар оператор боғланишини англатмайди.'
+    : 'AI javobi hozir mavjud emas. Kurs ma’lumotlari va bepul CCTV darsi menyuda ochiq; bu xabar operator bog‘lanishini anglatmaydi.';
 }
 
 export function getPhoneRequestAnswer(message: string): string {

@@ -5,7 +5,9 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 ## Features
 
 - `/start` course introduction and main menu
-- `/start ads` automatically creates or updates a Telegram Ads lead, notifies admins for new ad leads, starts follow-up tracking, and sends the lead webhook
+- `/start ads_<campaign>` keeps campaign attribution only in the private in-memory session; opening an ad never creates a lead, notification, webhook, or follow-up
+- Public `/help`, `/lesson`, `/quiz`, `/calculator`, and `/cancel` commands work without registration or phone sharing
+- Three-module CCTV mini-lesson, five-question session-only quiz, and bounded camera-storage calculator
 - Step-by-step registration flow
 - Admin notifications for every new lead
 - `/id` command to discover Telegram user ID
@@ -26,7 +28,7 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - Local JSON storage with atomic writes
 - Optional n8n-compatible lead webhook delivery
 - Environment-based configuration; no bot token in code
-- Campaign-level Telegram Ads tracking via `/start ads_<campaign>` and `/ads_stats`
+- Campaign attribution is attached only after explicit registration or an operator call request with a submitted phone number
 - Bot destination long and short descriptions synchronized automatically on every startup
 - Persistent channel draft and audited publish workflow for `@wstacademy_uz`
 

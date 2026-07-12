@@ -5,20 +5,25 @@ import { notifyAdmins } from './admin.js';
 import { deliverLeadWebhook } from './webhook.js';
 import type { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import type { BotContext, Lead } from './types.js';
+import { CALCULATOR_BUTTON, LESSON_BUTTON, QUIZ_BUTTON } from './learning.js';
+import { parseStartAttribution, resetSessionForStart } from './startFlow.js';
 
 const registerButton = Markup.keyboard([
-  ['📚 Kurs dasturi', '💳 Narx va to‘lov'],
-  ['ℹ️ Kurs haqida'],
-  ['📍 Manzil va jadval', '🔐 Maxfiylik'],
-  ['📝 Ro‘yxatdan o‘tish', '📞 Operator bilan bog‘lanish'],
+  [LESSON_BUTTON, QUIZ_BUTTON],
+  [CALCULATOR_BUTTON],
+  ['Kurs dasturi', 'Narx va to‘lov'],
+  ['Kurs haqida', 'Manzil va jadval'],
+  ['Maxfiylik'],
+  ['Ro‘yxatdan o‘tish', 'Operator bilan bog‘lanish'],
 ]).resize();
 const cancelButton = Markup.keyboard([['Bekor qilish']]).resize();
-const phoneButton = Markup.keyboard([[Markup.button.contactRequest('📱 Telefon raqamni yuborish')], ['Bekor qilish']]).resize();
+const phoneButton = Markup.keyboard([[Markup.button.contactRequest('Telefon raqamni yuborish')], ['Bekor qilish']]).resize();
 
 export const REGISTRATION_SCENE_ID = 'registration';
+export function mainMenu() { return registerButton; }
 
-export function mainMenu() {
-  return registerButton;
+export async function markRegistrationConsent(followUpStore: JsonFollowUpStore, telegramId: number, startedAt = new Date().toISOString()): Promise<void> {
+  await followUpStore.upsert({ telegramId, startedAt, count: 0 });
 }
 
 export function createRegistrationScene(store: JsonLeadStore, adminIds: number[], leadWebhookUrl: string | undefined, failureStore: JsonWebhookFailureStore, followUpStore: JsonFollowUpStore): Scenes.WizardScene<BotContext> {
@@ -26,116 +31,47 @@ export function createRegistrationScene(store: JsonLeadStore, adminIds: number[]
     REGISTRATION_SCENE_ID,
     async (ctx) => {
       ctx.scene.session.leadDraft = {};
-      if (ctx.from?.id) await followUpStore.upsert({ telegramId: ctx.from.id, startedAt: new Date().toISOString(), count: 0 });
-      await ctx.reply('Ism-familiyangizni kiriting:', cancelButton);
+      if (ctx.from?.id) await markRegistrationConsent(followUpStore, ctx.from.id);
+      await ctx.reply('Ro‘yxatdan o‘tishni boshladingiz. Ism-familiyangizni kiriting:', cancelButton);
       return ctx.wizard.next();
     },
-    async (ctx) => {
-      if (await handleCancel(ctx)) return;
-      ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, fullName: getText(ctx) };
-      await ctx.reply('Telefon raqamingizni yuboring yoki yozing:', phoneButton);
-      return ctx.wizard.next();
-    },
-    async (ctx) => {
-      if (await handleCancel(ctx)) return;
-      const phone = ctx.message && 'contact' in ctx.message && ctx.message.contact ? ctx.message.contact.phone_number : getText(ctx);
-      ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, phone };
-      await ctx.reply('Yoshingiz nechida?', cancelButton);
-      return ctx.wizard.next();
-    },
-    async (ctx) => {
-      if (await handleCancel(ctx)) return;
-      ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, age: getText(ctx) };
-      await ctx.reply('Qaysi hudud/tumandansiz?', cancelButton);
-      return ctx.wizard.next();
-    },
-    async (ctx) => {
-      if (await handleCancel(ctx)) return;
-      ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, city: getText(ctx) };
-      await ctx.reply('Videokuzatuv, IT yoki texnika bo‘yicha tajribangiz bormi?', cancelButton);
-      return ctx.wizard.next();
-    },
-    async (ctx) => {
-      if (await handleCancel(ctx)) return;
-      ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, experience: getText(ctx) };
-      await ctx.reply('Sizga qaysi vaqt darsga kelish qulay?', cancelButton);
-      return ctx.wizard.next();
-    },
-    async (ctx) => {
-      if (await handleCancel(ctx)) return;
-      ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, preferredTime: getText(ctx) };
-      await ctx.reply('Qo‘shimcha izohingiz bo‘lsa yozing. Bo‘lmasa “yo‘q” deb yuboring.', cancelButton);
-      return ctx.wizard.next();
-    },
+    async (ctx) => { if (await handleCancel(ctx)) return; ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, fullName: getText(ctx) }; await ctx.reply('Telefon raqamingizni yuboring yoki yozing:', phoneButton); return ctx.wizard.next(); },
+    async (ctx) => { if (await handleCancel(ctx)) return; const phone = ctx.message && 'contact' in ctx.message && ctx.message.contact ? ctx.message.contact.phone_number : getText(ctx); ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, phone }; await ctx.reply('Yoshingiz nechida?', cancelButton); return ctx.wizard.next(); },
+    async (ctx) => { if (await handleCancel(ctx)) return; ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, age: getText(ctx) }; await ctx.reply('Qaysi hudud/tumandansiz?', cancelButton); return ctx.wizard.next(); },
+    async (ctx) => { if (await handleCancel(ctx)) return; ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, city: getText(ctx) }; await ctx.reply('Videokuzatuv, IT yoki texnika bo‘yicha tajribangiz bormi?', cancelButton); return ctx.wizard.next(); },
+    async (ctx) => { if (await handleCancel(ctx)) return; ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, experience: getText(ctx) }; await ctx.reply('Sizga qaysi vaqt darsga kelish qulay?', cancelButton); return ctx.wizard.next(); },
+    async (ctx) => { if (await handleCancel(ctx)) return; ctx.scene.session.leadDraft = { ...ctx.scene.session.leadDraft, preferredTime: getText(ctx) }; await ctx.reply('Qo‘shimcha izohingiz bo‘lsa yozing. Bo‘lmasa “yo‘q” deb yuboring.', cancelButton); return ctx.wizard.next(); },
     async (ctx) => {
       if (await handleCancel(ctx)) return;
       const draft = { ...ctx.scene.session.leadDraft, notes: getText(ctx) };
       const from = ctx.from;
-
-      if (!from || !draft.fullName || !draft.phone || !draft.age || !draft.city || !draft.experience || !draft.preferredTime) {
-        await ctx.reply('Maʼlumotlar to‘liq emas. Iltimos, /start orqali qayta urinib ko‘ring.', mainMenu());
-        return ctx.scene.leave();
-      }
-
-      const lead: Lead = {
-        id: randomUUID(),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        telegramId: from.id,
-        username: from.username,
-        firstName: from.first_name,
-        lastName: from.last_name,
-        fullName: draft.fullName,
-        phone: draft.phone,
-        age: draft.age,
-        city: draft.city ?? '',
-        workStatus: '',
-        experience: draft.experience,
-        preferredTime: draft.preferredTime,
-        notes: draft.notes?.toLowerCase() === 'yo‘q' || draft.notes?.toLowerCase() === "yo'q" ? undefined : draft.notes,
-        goal: '',
-        paymentOption: '',
-        status: 'RegistrationCompleted',
-        source: ctx.session.source ?? 'registration',
-        intent: 'registration',
-        lastMessage: draft.notes ?? 'registration completed',
-        messages: [{ text: draft.notes ?? 'registration completed', createdAt: new Date().toISOString() }],
-        operatorNote: '',
-        nextFollowUp: '',
-        paymentStatus: '',
-      };
-
+      if (!from || !draft.fullName || !draft.phone || !draft.age || !draft.city || !draft.experience || !draft.preferredTime) { await ctx.reply('Ma’lumotlar to‘liq emas. /start orqali qayta urinib ko‘ring.', mainMenu()); return ctx.scene.leave(); }
+      const now = new Date().toISOString();
+      const lead: Lead = { id: randomUUID(), createdAt: now, updatedAt: now, telegramId: from.id, username: from.username, firstName: from.first_name, lastName: from.last_name, fullName: draft.fullName, phone: draft.phone, age: draft.age, city: draft.city, workStatus: '', experience: draft.experience, preferredTime: draft.preferredTime, notes: /^yo['‘’]?q$/i.test(draft.notes ?? '') ? undefined : draft.notes, goal: '', paymentOption: '', status: 'RegistrationCompleted', source: ctx.session.source ?? 'registration', campaignId: ctx.session.campaignId, intent: 'registration', lastMessage: draft.notes ?? 'registration completed', messages: [{ text: draft.notes ?? 'registration completed', createdAt: now }], operatorNote: '', nextFollowUp: '', paymentStatus: '' };
       const saved = await store.upsert(lead);
       await followUpStore.upsert({ telegramId: from.id, startedAt: saved.lead.createdAt, count: 0, registrationCompleted: true });
       await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead);
       await notifyAdmins(ctx, adminIds, saved.lead);
-      await ctx.reply(
-        [
-          '✅ Arizangiz qabul qilindi!',
-          'Operator tez orada siz bilan bog‘lanadi.',
-          '',
-          `👨‍💼 Operator: ${courseInfo.operator}`,
-          `📞 Telefon: ${courseInfo.phone}`,
-        ].join('\n'),
-        mainMenu(),
-      );
+      await ctx.reply(['Arizangiz qabul qilindi.', 'Operator tez orada siz bilan bog‘lanadi.', `Operator: ${courseInfo.operator}`, `Telefon: ${courseInfo.phone}`].join('\n'), mainMenu());
       return ctx.scene.leave();
     },
   );
 }
 
-export async function sendStart(ctx: BotContext): Promise<void> {
-  await ctx.reply(formatCourseIntro(), mainMenu());
-}
-
-function getText(ctx: BotContext): string {
-  if (ctx.message && 'text' in ctx.message && ctx.message.text) return ctx.message.text.trim();
-  return '';
-}
-
+export async function sendStart(ctx: BotContext): Promise<void> { await ctx.reply(formatCourseIntro(), mainMenu()); }
+function getText(ctx: BotContext): string { return ctx.message && 'text' in ctx.message && ctx.message.text ? ctx.message.text.trim() : ''; }
 async function handleCancel(ctx: BotContext): Promise<boolean> {
-  if (getText(ctx).toLowerCase() !== 'bekor qilish') return false;
-  await ctx.reply('Ro‘yxatdan o‘tish bekor qilindi. Qayta boshlash uchun tugmadan foydalaning.', mainMenu());
+  const text = getText(ctx);
+  if (/^\/start(?:\s|$)/i.test(text)) {
+    const attribution = parseStartAttribution(text);
+    resetSessionForStart(ctx.session, attribution);
+    await ctx.scene.leave();
+    await sendStart(ctx);
+    return true;
+  }
+  if (text.toLowerCase() !== 'bekor qilish' && !/^\/cancel(?:@\w+)?$/i.test(text)) return false;
+  ctx.scene.session.leadDraft = undefined;
   await ctx.scene.leave();
+  await ctx.reply('Ro‘yxatdan o‘tish bekor qilindi.', mainMenu());
   return true;
 }

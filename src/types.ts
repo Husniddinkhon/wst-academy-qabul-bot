@@ -60,6 +60,14 @@ export interface BotSession extends Scenes.WizardSessionData {
   };
   source?: LeadSource;
   campaignId?: string;
+  lessonIndex?: number;
+  quizIndex?: number;
+  quizScore?: number;
+  calculator?: {
+    step: 'cameras' | 'bitrate' | 'days';
+    cameras?: number;
+    bitrate?: number;
+  };
 }
 
 export interface FollowUpState {
