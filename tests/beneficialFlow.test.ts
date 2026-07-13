@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { CALCULATOR_BUTTON, LESSONS, LESSON_BUTTON, QUIZ, QUIZ_BUTTON, storageTerabytes, validateCalculatorValue } from '../src/learning.js';
 import { parseStartAttribution, resetSessionForStart } from '../src/startFlow.js';
 import { getTruthfulFallbackAnswer } from '../src/aiAgent.js';
-import { mainMenu, markRegistrationConsent } from '../src/registration.js';
+import { mainMenu, markRegistrationConsent, startInlineMenu } from '../src/registration.js';
 import type { BotSession } from '../src/types.js';
 import type { JsonFollowUpStore } from '../src/storage.js';
 
@@ -34,6 +34,8 @@ test('follow-up begins only through explicit registration consent helper', async
 test('free menu and content are substantial and deterministic', () => {
   const serialized = JSON.stringify(mainMenu());
   for (const label of [LESSON_BUTTON, QUIZ_BUTTON, CALCULATOR_BUTTON]) assert.match(serialized, new RegExp(label));
+  const inlineSerialized = JSON.stringify(startInlineMenu());
+  for (const action of ['academy_lesson', 'academy_quiz', 'academy_calculator', 'academy_program', 'academy_price', 'academy_schedule', 'academy_register']) assert.match(inlineSerialized, new RegExp(action));
   assert.equal(LESSONS.length, 3);
   assert.equal(QUIZ.length, 5);
   assert.ok(LESSONS.every((lesson) => lesson.body.length > 100));
@@ -56,6 +58,7 @@ test('public command wiring and ad start contain no automatic lead call', async 
   const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
   const registration = await readFile(new URL('../src/registration.ts', import.meta.url), 'utf8');
   for (const command of ['help', 'lesson', 'quiz', 'calculator', 'cancel']) assert.match(source, new RegExp(`bot\\.command\\('${command}'`));
+  for (const action of ['academy_lesson', 'academy_quiz', 'academy_calculator', 'academy_program', 'academy_price', 'academy_schedule', 'academy_register']) assert.match(source, new RegExp(`bot\\.action\\('${action}'`));
   assert.doesNotMatch(source, /saveTelegramAdsLead/);
   const startBlock = source.slice(source.indexOf('bot.start'), source.indexOf("bot.hears", source.indexOf('bot.start')));
   assert.doesNotMatch(startBlock, /store\.|followUpStore|notifyAdmins|deliverLeadWebhook/);

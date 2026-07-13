@@ -6,7 +6,7 @@ import { isAdmin, notifyCallRequestLead, registerAdminCommands } from './admin.j
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
 import { answerWithAiAgent, extractPhoneNumber, getPhoneRequestAnswer, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic } from './aiAgent.js';
-import { deliverLeadWebhook } from './webhook.js';
+import { configureLeadWebhookSigning, deliverLeadWebhook } from './webhook.js';
 import type { BotContext, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
 import { startDailyReport } from './dailyReport.js';
@@ -132,6 +132,10 @@ async function handleLearningText(ctx: BotContext, message: string): Promise<boo
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
+  configureLeadWebhookSigning(config.leadWebhookServiceId && config.leadWebhookSecret ? {
+    serviceId: config.leadWebhookServiceId,
+    secret: config.leadWebhookSecret,
+  } : undefined);
   const postgres = config.databaseUrl ? new PostgresStorage(config.databaseUrl) : undefined;
   if (postgres) await postgres.migrate(config.leadsFile, config.followupsFile);
   const store = postgres ? new PostgresLeadStore(postgres) : new JsonLeadStore(config.leadsFile);
@@ -155,6 +159,13 @@ async function bootstrap(): Promise<void> {
   bot.command('quiz', startQuiz);
   bot.command('calculator', startCalculator);
   bot.command('cancel', cancelActiveFlow);
+  bot.action('academy_lesson', async (ctx) => { await ctx.answerCbQuery(); await startLesson(ctx); });
+  bot.action('academy_quiz', async (ctx) => { await ctx.answerCbQuery(); await startQuiz(ctx); });
+  bot.action('academy_calculator', async (ctx) => { await ctx.answerCbQuery(); await startCalculator(ctx); });
+  bot.action('academy_program', async (ctx) => { await ctx.answerCbQuery(); await ctx.reply(formatCourseProgram(), mainMenu()); });
+  bot.action('academy_price', async (ctx) => { await ctx.answerCbQuery(); await ctx.reply(formatPriceInfo(), mainMenu()); });
+  bot.action('academy_schedule', async (ctx) => { await ctx.answerCbQuery(); await ctx.reply(formatLocationAndSchedule(), mainMenu()); });
+  bot.action('academy_register', async (ctx) => { await ctx.answerCbQuery(); await ctx.scene.enter(REGISTRATION_SCENE_ID); });
   bot.hears(LESSON_BUTTON, startLesson);
   bot.hears(QUIZ_BUTTON, startQuiz);
   bot.hears(CALCULATOR_BUTTON, startCalculator);

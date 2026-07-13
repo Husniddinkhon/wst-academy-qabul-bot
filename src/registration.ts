@@ -21,6 +21,14 @@ const phoneButton = Markup.keyboard([[Markup.button.contactRequest('Telefon raqa
 
 export const REGISTRATION_SCENE_ID = 'registration';
 export function mainMenu() { return registerButton; }
+export function startInlineMenu() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('Bepul mini-dars', 'academy_lesson'), Markup.button.callback('Bilim testi', 'academy_quiz')],
+    [Markup.button.callback('Kurs dasturi', 'academy_program'), Markup.button.callback('Narx va to\u2018lov', 'academy_price')],
+    [Markup.button.callback('Manzil va jadval', 'academy_schedule'), Markup.button.callback('Xotira kalkulyatori', 'academy_calculator')],
+    [Markup.button.callback('Ro\u2018yxatdan o\u2018tish', 'academy_register')],
+  ]);
+}
 
 export async function markRegistrationConsent(followUpStore: JsonFollowUpStore, telegramId: number, startedAt = new Date().toISOString()): Promise<void> {
   await followUpStore.upsert({ telegramId, startedAt, count: 0 });
@@ -58,7 +66,7 @@ export function createRegistrationScene(store: JsonLeadStore, adminIds: number[]
   );
 }
 
-export async function sendStart(ctx: BotContext): Promise<void> { await ctx.reply(formatCourseIntro(), mainMenu()); }
+export async function sendStart(ctx: BotContext): Promise<void> { await ctx.reply(formatCourseIntro(), startInlineMenu()); }
 function getText(ctx: BotContext): string { return ctx.message && 'text' in ctx.message && ctx.message.text ? ctx.message.text.trim() : ''; }
 async function handleCancel(ctx: BotContext): Promise<boolean> {
   const text = getText(ctx);

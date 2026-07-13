@@ -8,6 +8,8 @@ export interface AppConfig {
   adminIds: number[];
   leadsFile: string;
   leadWebhookUrl?: string;
+  leadWebhookServiceId?: string;
+  leadWebhookSecret?: string;
   webhookFailedFile: string;
   followupsFile: string;
   dailyReportEnabled: boolean;
@@ -50,16 +52,29 @@ function parseAdminIds(value: string | undefined): number[] {
 
 export function loadConfig(): AppConfig {
   const botToken = process.env.BOT_TOKEN;
+  const leadWebhookServiceId = process.env.LEAD_WEBHOOK_SERVICE_ID?.trim() || undefined;
+  const leadWebhookSecret = process.env.LEAD_WEBHOOK_SECRET || undefined;
 
   if (!botToken) {
     throw new Error('BOT_TOKEN is required. Copy .env.example to .env and set your Telegram bot token.');
+  }
+  if (Boolean(leadWebhookServiceId) !== Boolean(leadWebhookSecret)) {
+    throw new Error('LEAD_WEBHOOK_SERVICE_ID and LEAD_WEBHOOK_SECRET must be configured together.');
+  }
+  if (leadWebhookSecret && leadWebhookSecret.length < 32) {
+    throw new Error('LEAD_WEBHOOK_SECRET must contain at least 32 characters.');
+  }
+  if (leadWebhookServiceId && !process.env.LEAD_WEBHOOK_URL?.trim()) {
+    throw new Error('LEAD_WEBHOOK_URL is required when signed Academy webhook delivery is enabled.');
   }
 
   return {
     botToken,
     adminIds: parseAdminIds(process.env.ADMIN_IDS),
     leadsFile: process.env.LEADS_FILE ?? './data/leads.json',
-    leadWebhookUrl: process.env.LEAD_WEBHOOK_URL || undefined,
+    leadWebhookUrl: process.env.LEAD_WEBHOOK_URL?.trim() || undefined,
+    leadWebhookServiceId,
+    leadWebhookSecret,
     webhookFailedFile: process.env.WEBHOOK_FAILED_FILE ?? './data/webhook_failed.json',
     followupsFile: process.env.FOLLOWUPS_FILE ?? './data/followups.json',
     dailyReportEnabled: process.env.DAILY_REPORT_ENABLED !== 'false',

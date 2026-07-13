@@ -71,12 +71,28 @@ LEADS_FILE=./data/leads.json
 WEBHOOK_FAILED_FILE=./data/webhook_failed.json
 FOLLOWUPS_FILE=./data/followups.json
 LEAD_WEBHOOK_URL=
+LEAD_WEBHOOK_SERVICE_ID=
+LEAD_WEBHOOK_SECRET=
 DAILY_REPORT_ENABLED=true
 DAILY_REPORT_HOUR=21
 NODE_ENV=production
 ```
 
-Use `/id` in the bot to find admin Telegram IDs, then add them to `ADMIN_IDS`. Admins can run `/admin_help` in Telegram to see command formats. Set `LEAD_WEBHOOK_URL` only if you want lead events posted to n8n or another webhook receiver. `WEBHOOK_FAILED_FILE` stores failed webhook deliveries for `/retry_webhooks`, and `FOLLOWUPS_FILE` stores follow-up automation state. `DAILY_REPORT_ENABLED=false` disables the daily admin summary; `DAILY_REPORT_HOUR` accepts an hour from 0 to 23 and defaults to 21.
+Use `/id` in the bot to find admin Telegram IDs, then add them to `ADMIN_IDS`. Admins can run `/admin_help` in Telegram to see command formats. Set `LEAD_WEBHOOK_URL` only if you want lead events posted to n8n, the Academy API, or another webhook receiver. `WEBHOOK_FAILED_FILE` stores failed webhook deliveries for `/retry_webhooks`, and `FOLLOWUPS_FILE` stores follow-up automation state. `DAILY_REPORT_ENABLED=false` disables the daily admin summary; `DAILY_REPORT_HOUR` accepts an hour from 0 to 23 and defaults to 21.
+
+### Signed Academy lead delivery
+
+To send leads to `POST /api/v1/admissions/bot-leads`, configure all three values:
+
+```env
+LEAD_WEBHOOK_URL=https://academy.montag.uz/api/v1/admissions/bot-leads
+LEAD_WEBHOOK_SERVICE_ID=wst-academy-telegram-bot
+LEAD_WEBHOOK_SECRET=use-the-same-random-secret-as-the-academy-api
+```
+
+The secret must contain at least 32 characters and must match the Academy API configuration. The bot signs the exact JSON bytes with lowercase hexadecimal HMAC-SHA256 over `timestamp + "\\n" + nonce + "\\n" + body`. Signed requests include `X-Service-Id`, `X-Service-Timestamp`, `X-Service-Nonce`, `X-Service-Signature`, and a body-stable `Idempotency-Key`. Each retry gets a fresh timestamp and nonce while retaining the same idempotency key for the same lead body.
+
+When the signing variables are absent, the webhook keeps its existing generic payload and sends no Academy authentication headers. `LEAD_WEBHOOK_SERVICE_ID` and `LEAD_WEBHOOK_SECRET` must always be set together. Never commit the real secret or print it in logs.
 
 ## Scripts
 
@@ -100,7 +116,7 @@ The `data/*.json` files are ignored by Git to avoid committing personal lead dat
 
 1. Install dependencies with `npm ci`.
 2. Create a production `.env` file with `BOT_TOKEN`, `ADMIN_IDS`, and optional `LEADS_FILE`.
-3. Optionally set `LEAD_WEBHOOK_URL` for n8n lead forwarding.
+3. Optionally set `LEAD_WEBHOOK_URL` for generic forwarding, or configure both signing variables for Academy delivery.
 4. Run `npm run build`.
 5. Start with `npm start` under a process manager such as PM2 or systemd.
 

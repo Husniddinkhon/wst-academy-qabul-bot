@@ -1,5 +1,17 @@
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import type { FailedWebhookPayload, JsonWebhookFailureStore } from './storage.js';
 import type { Lead, LeadWebhookEvent } from './types.js';
+
+export interface LeadWebhookSigningConfig {
+  serviceId: string;
+  secret: string;
+}
+
+let signingConfig: LeadWebhookSigningConfig | undefined;
+
+export function configureLeadWebhookSigning(config: LeadWebhookSigningConfig | undefined): void {
+  signingConfig = config ? { serviceId: config.serviceId, secret: config.secret } : undefined;
+}
 
 export function toWebhookPayload(event: LeadWebhookEvent, lead: Lead): Record<string, string> {
   return {
@@ -26,9 +38,70 @@ export function toWebhookPayload(event: LeadWebhookEvent, lead: Lead): Record<st
   };
 }
 
+export interface AcademyLeadWebhookPayload {
+  telegram_id: number;
+  telegram_username?: string;
+  full_name?: string;
+  phone?: string;
+  source: string;
+  campaign?: string;
+  course_interest?: string;
+  notes?: string;
+  payment_status?: string;
+}
+
+export function toAcademyWebhookPayload(event: LeadWebhookEvent, lead: Lead): AcademyLeadWebhookPayload {
+  const details = {
+    event,
+    lead_status: lead.status,
+    city: lead.city || undefined,
+    age: lead.age || undefined,
+    work_status: lead.workStatus || undefined,
+    experience: lead.experience || undefined,
+    payment_option: lead.paymentOption || undefined,
+    intent: lead.intent || undefined,
+    last_message: lead.lastMessage || undefined,
+    operator_note: lead.operatorNote || undefined,
+    next_follow_up: lead.nextFollowUp || undefined,
+    updated_at: lead.updatedAt,
+  };
+  return withoutUndefined({
+    telegram_id: lead.telegramId,
+    telegram_username: lead.username,
+    full_name: lead.fullName || undefined,
+    phone: lead.phone || undefined,
+    source: lead.source,
+    campaign: lead.campaignId,
+    course_interest: lead.goal || undefined,
+    notes: JSON.stringify(details),
+    payment_status: lead.paymentStatus || undefined,
+  });
+}
+
+function withoutUndefined<T extends object>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
+}
+
+export function createAcademyHeaders(body: string, config: LeadWebhookSigningConfig, nowSeconds = Math.floor(Date.now() / 1000), nonce = randomBytes(24).toString('hex')): Record<string, string> {
+  const timestamp = String(nowSeconds);
+  const canonical = `${timestamp}\n${nonce}\n${body}`;
+  const signature = createHmac('sha256', config.secret).update(canonical, 'utf8').digest('hex');
+  const idempotencyKey = `lead-${createHash('sha256').update(body, 'utf8').digest('hex')}`;
+  return {
+    'content-type': 'application/json',
+    'X-Service-Id': config.serviceId,
+    'X-Service-Timestamp': timestamp,
+    'X-Service-Nonce': nonce,
+    'X-Service-Signature': signature,
+    'Idempotency-Key': idempotencyKey,
+  };
+}
+
 export async function sendLeadWebhook(webhookUrl: string | undefined, event: LeadWebhookEvent, lead: Lead): Promise<void> {
   if (!webhookUrl) return;
-  const response = await fetch(webhookUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(toWebhookPayload(event, lead)) });
+  const body = JSON.stringify(signingConfig ? toAcademyWebhookPayload(event, lead) : toWebhookPayload(event, lead));
+  const headers = signingConfig ? createAcademyHeaders(body, signingConfig) : { 'content-type': 'application/json' };
+  const response = await fetch(webhookUrl, { method: 'POST', headers, body });
   if (!response.ok) throw new Error(`Lead webhook failed with status ${response.status}`);
 }
 

@@ -5,6 +5,13 @@ declare module 'dotenv' {
 
 declare module 'node:crypto' {
   export function randomUUID(): string;
+  interface Digest {
+    update(data: string, inputEncoding?: 'utf8'): Digest;
+    digest(encoding: 'hex'): string;
+  }
+  export function createHash(algorithm: 'sha256'): Digest;
+  export function createHmac(algorithm: 'sha256', key: string): Digest;
+  export function randomBytes(size: number): { toString(encoding: 'hex'): string };
 }
 
 declare module 'node:fs/promises' {
@@ -25,6 +32,7 @@ declare module 'telegraf' {
     constructor(token: string);
     use(middleware: unknown): void;
     start(handler: (ctx: C) => unknown): void;
+    action(trigger: string, handler: (ctx: C) => unknown): void;
     hears(trigger: string, handler: (ctx: C) => unknown): void;
     on(updateType: string, handler: (ctx: C) => unknown): void;
     command(command: string, handler: (ctx: C) => unknown): void;
@@ -43,6 +51,7 @@ declare module 'telegraf' {
       message?: { text?: string; caption?: string; photo?: Array<{ file_id: string; width: number; height: number }>; contact?: { phone_number: string } };
       telegram: Telegraf['telegram'];
       reply(text: string, extra?: unknown): Promise<unknown>;
+      answerCbQuery(text?: string): Promise<unknown>;
       replyWithDocument(document: unknown): Promise<unknown>;
       scene: { session: D; current?: { id?: string }; enter(sceneId: string): Promise<unknown>; leave(): Promise<unknown> };
       wizard: { next(): unknown };
@@ -62,7 +71,8 @@ declare module 'telegraf' {
 
   export const Markup: {
     keyboard(buttons: unknown[][]): { resize(): unknown };
-    button: { contactRequest(text: string): unknown };
+    inlineKeyboard(buttons: unknown[][]): unknown;
+    button: { contactRequest(text: string): unknown; callback(text: string, data: string): unknown };
   };
 
   export const Input: {

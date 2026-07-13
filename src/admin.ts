@@ -86,6 +86,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       `ADMIN_IDS: ${adminIds.length > 0 ? `configured (${adminIds.length})` : 'MISSING'}`,
       `LEADS_FILE: ${envValue('LEADS_FILE', './data/leads.json')}`,
       `LEAD_WEBHOOK_URL: ${configured(leadWebhookUrl)}`,
+      `LEAD_WEBHOOK_SIGNING: ${process.env.LEAD_WEBHOOK_SERVICE_ID && process.env.LEAD_WEBHOOK_SECRET ? 'configured' : 'disabled'}`,
       `WEBHOOK_FAILED_FILE: ${envValue('WEBHOOK_FAILED_FILE', './data/webhook_failed.json')}`,
       `FOLLOWUPS_FILE: ${envValue('FOLLOWUPS_FILE', './data/followups.json')}`,
       `NODE_ENV: ${envValue('NODE_ENV', 'not set')}`,
