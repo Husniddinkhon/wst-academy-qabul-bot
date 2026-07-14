@@ -19,6 +19,7 @@ export interface AppConfig {
   botDescription: string;
   botShortDescription: string;
   channelChatId: string;
+  salesDiscussionChatId?: number;
   channelPostsFile: string;
   isProduction: boolean;
   ai: AiConfig;
@@ -48,6 +49,15 @@ function parseAdminIds(value: string | undefined): number[] {
     .filter(Boolean)
     .map((id) => Number(id))
     .filter((id) => Number.isSafeInteger(id) && id > 0);
+}
+
+function parseOptionalChatId(value: string | undefined): number | undefined {
+  if (!value?.trim()) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed === 0) {
+    throw new Error('SALES_DISCUSSION_CHAT_ID must be a valid Telegram chat ID.');
+  }
+  return parsed;
 }
 
 export function loadConfig(): AppConfig {
@@ -84,6 +94,7 @@ export function loadConfig(): AppConfig {
     botDescription: process.env.BOT_DESCRIPTION || 'WST Academy videokuzatuv kursi: 1 oy, 12 dars, offline real uskunalarda amaliyot. Manzil: Toshkent shahri, Arnasoy ko‘chasi, 33-uy. Keyingi guruh 2026-yil 4-avgustga rejalashtirilgan; qabulga qarab 1–2 kun siljishi mumkin. Darslar 10:00–16:00 oralig‘ida, kunlar guruh talabiga qarab belgilanadi.',
     botShortDescription: process.env.BOT_SHORT_DESCRIPTION || 'WST Academy: videokuzatuv bo‘yicha 1 oy, 12 dars. Offline, real uskunalarda amaliy kurs.',
     channelChatId: process.env.CHANNEL_CHAT_ID || '-1004297032922',
+    salesDiscussionChatId: parseOptionalChatId(process.env.SALES_DISCUSSION_CHAT_ID),
     channelPostsFile: process.env.CHANNEL_POSTS_FILE || './data/channel_posts.json',
     isProduction: process.env.NODE_ENV === 'production',
     databaseUrl: process.env.DATABASE_URL || undefined,

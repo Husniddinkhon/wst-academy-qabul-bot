@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
 import { courseInfo, formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
-import { isAdmin, notifyCallRequestLead, registerAdminCommands } from './admin.js';
+import { isAdmin, notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
 import { answerWithAiAgent, extractPhoneNumber, getPhoneRequestAnswer, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic } from './aiAgent.js';
@@ -14,6 +14,7 @@ import { PostgresFollowUpStore, PostgresLeadStore, PostgresStorage } from './pos
 import { JsonChannelPostStore } from './channelPosts.js';
 import { BACK_BUTTON, CALCULATOR_BUTTON, LESSON_BUTTON, MENU_BUTTON, NEXT_BUTTON, QUIZ, QUIZ_BUTTON, lessonKeyboard, lessonText, quizKeyboard, quizText, startCalculator, startLesson, startQuiz, storageTerabytes, validateCalculatorValue } from './learning.js';
 import { parseStartAttribution, resetSessionForStart } from './startFlow.js';
+import { classifyProductLead, getProductSalesAnswer, isProductSalesQuestion, productLeadReason, UNV_CAMPAIGN_ID } from './productSales.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -59,6 +60,54 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
     message,
     reason: 'User asked for a call.',
   });
+}
+
+async function saveProductSalesLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, message: string): Promise<void> {
+  const from = ctx.from;
+  if (!from) return;
+  const now = new Date().toISOString();
+  const status = classifyProductLead(message);
+  const phone = extractPhoneNumber(message) ?? '';
+  const lead: Lead = {
+    id: randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+    telegramId: from.id,
+    username: from.username,
+    firstName: from.first_name,
+    lastName: from.last_name,
+    fullName: [from.first_name, from.last_name].filter(Boolean).join(' ') || 'Telegram subscriber',
+    phone,
+    age: '',
+    city: '',
+    workStatus: '',
+    experience: '',
+    preferredTime: '',
+    notes: productLeadReason(message),
+    goal: 'UNV Uho-P1G-M3F4D-EU xaridi',
+    paymentOption: '',
+    status,
+    source: 'channel',
+    campaignId: UNV_CAMPAIGN_ID,
+    intent: 'product_sales',
+    lastMessage: message,
+    messages: [{ text: message, createdAt: now }],
+    operatorNote: '',
+    nextFollowUp: '',
+    paymentStatus: '',
+  };
+
+  const saved = await store.upsert(lead);
+  await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead);
+  if (status === 'Hot') {
+    await notifyHotLead(ctx, adminIds, {
+      username: from.username,
+      telegramId: from.id,
+      phone: phone || undefined,
+      message,
+      reason: productLeadReason(message),
+    });
+  }
 }
 
 async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>): Promise<void> {
@@ -207,6 +256,13 @@ async function bootstrap(): Promise<void> {
     const message = ctx.message?.text?.trim();
 
     if (!message || message.startsWith('/') || ctx.scene.current) return;
+    const telegramContext = ctx as unknown as { chat?: { id: number; type: string }; from?: { is_bot?: boolean } };
+    if (telegramContext.chat?.type !== 'private') {
+      if (telegramContext.chat?.id !== config.salesDiscussionChatId || telegramContext.from?.is_bot || !isProductSalesQuestion(message)) return;
+      await saveProductSalesLead(ctx, store, failureStore, config.adminIds, config.leadWebhookUrl, message);
+      await ctx.reply(getProductSalesAnswer(message, config.operatorUsername));
+      return;
+    }
     if (await handleLearningText(ctx, message)) return;
 
     if (ctx.session.waitingForCallPhone) {
