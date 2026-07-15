@@ -65,3 +65,13 @@ test('public command wiring and ad start contain no automatic lead call', async 
   assert.match(registration, /\^\\\/start/);
   assert.match(registration, /resetSessionForStart/);
 });
+
+test('operator button starts explicit phone consent flow', async () => {
+  const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
+  const start = source.indexOf("bot.hears('Operator bilan bog‘lanish'");
+  const block = source.slice(start, source.indexOf('});', start) + 3);
+  assert.match(block, /waitingForCallPhone/);
+  assert.match(block, /getPhoneRequestAnswer/);
+  assert.match(block, /phoneRequestKeyboard/);
+  assert.doesNotMatch(block, /saveCallRequestLead/);
+});

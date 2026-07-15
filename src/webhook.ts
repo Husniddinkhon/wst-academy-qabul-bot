@@ -8,6 +8,7 @@ export interface LeadWebhookSigningConfig {
 }
 
 let signingConfig: LeadWebhookSigningConfig | undefined;
+export const LEAD_WEBHOOK_TIMEOUT_MS = 8_000;
 
 export function configureLeadWebhookSigning(config: LeadWebhookSigningConfig | undefined): void {
   signingConfig = config ? { serviceId: config.serviceId, secret: config.secret } : undefined;
@@ -97,18 +98,29 @@ export function createAcademyHeaders(body: string, config: LeadWebhookSigningCon
   };
 }
 
-export async function sendLeadWebhook(webhookUrl: string | undefined, event: LeadWebhookEvent, lead: Lead): Promise<void> {
+export async function sendLeadWebhook(webhookUrl: string | undefined, event: LeadWebhookEvent, lead: Lead, timeoutMs = LEAD_WEBHOOK_TIMEOUT_MS): Promise<void> {
   if (!webhookUrl) return;
   const body = JSON.stringify(signingConfig ? toAcademyWebhookPayload(event, lead) : toWebhookPayload(event, lead));
   const headers = signingConfig ? createAcademyHeaders(body, signingConfig) : { 'content-type': 'application/json' };
-  const response = await fetch(webhookUrl, { method: 'POST', headers, body });
-  if (!response.ok) throw new Error(`Lead webhook failed with status ${response.status}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(webhookUrl, { method: 'POST', headers, body, signal: controller.signal });
+    if (!response.ok) throw new Error(`Lead webhook failed with status ${response.status}`);
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Lead webhook timed out after ${timeoutMs}ms.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
-export async function deliverLeadWebhook(webhookUrl: string | undefined, failureStore: JsonWebhookFailureStore, event: LeadWebhookEvent, lead: Lead): Promise<void> {
+export async function deliverLeadWebhook(webhookUrl: string | undefined, failureStore: JsonWebhookFailureStore, event: LeadWebhookEvent, lead: Lead, timeoutMs = LEAD_WEBHOOK_TIMEOUT_MS): Promise<void> {
   if (!webhookUrl) return;
   try {
-    await sendLeadWebhook(webhookUrl, event, lead);
+    await sendLeadWebhook(webhookUrl, event, lead, timeoutMs);
   } catch (error) {
     console.error('Lead webhook delivery failed:', safeError(error));
     await failureStore.add({ event, lead, lastError: safeError(error) });

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { Pool, type PoolClient } from 'pg';
-import { JsonFollowUpStore, JsonLeadStore, STATUS_PRIORITY } from './storage.js';
+import { JsonFollowUpStore, JsonLeadStore, mergeLeadRecords } from './storage.js';
 import type { FollowUpState, Lead, LeadStatus } from './types.js';
 
 export const SCHEMA_VERSION = 1;
@@ -39,7 +39,7 @@ export class PostgresLeadStore extends JsonLeadStore {
       const current = await client.query('SELECT payload FROM leads WHERE telegram_id=$1 FOR UPDATE', [lead.telegramId]);
       const created = current.rowCount === 0;
       const existing = current.rows[0]?.payload as Lead | undefined;
-      const merged = existing ? mergeLead(existing, lead) : normalizeLead(lead);
+      const merged = existing ? mergeLeadRecords(existing, lead) : normalizeLead(lead);
       await writeLead(client, merged);
       await client.query('INSERT INTO conversation_events(telegram_id,event_type,payload,idempotency_key) VALUES($1,$2,$3,$4) ON CONFLICT(idempotency_key) DO NOTHING', [lead.telegramId, created ? 'lead_created' : 'lead_updated', { message: lead.lastMessage, status: merged.status }, `${lead.telegramId}:${lead.updatedAt}:${lead.lastMessage}`]);
       await client.query('COMMIT');
@@ -68,5 +68,4 @@ export class PostgresFollowUpStore extends JsonFollowUpStore {
 async function importJson(c:PoolClient,leadsFile:string,followupsFile:string){for(const lead of await jsonArray<Lead>(leadsFile,'leads'))await c.query('INSERT INTO leads(telegram_id,payload,status,source,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',[lead.telegramId,normalizeLead(lead),lead.status,lead.source??'unknown',lead.createdAt,lead.updatedAt??lead.createdAt]);for(const f of await jsonArray<FollowUpState>(followupsFile,'followups'))await c.query('INSERT INTO followups(telegram_id,payload,count,last_sent_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[f.telegramId,f,f.count,f.lastSentAt??null]);}
 async function jsonArray<T>(file:string,key:string):Promise<T[]>{try{const x=JSON.parse(await readFile(file,'utf8')) as Record<string,T[]>;return Array.isArray(x[key])?x[key]:[];}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return[];throw e;}}
 async function writeLead(c:PoolClient,l:Lead){await c.query('INSERT INTO leads(telegram_id,payload,status,source,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(telegram_id) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status,source=EXCLUDED.source,updated_at=EXCLUDED.updated_at',[l.telegramId,l,l.status,l.source,l.createdAt,l.updatedAt]);}
-function mergeLead(e:Lead,n:Lead):Lead{const a=normalizeLead(e),status=STATUS_PRIORITY[n.status]>STATUS_PRIORITY[a.status]?n.status:a.status;return normalizeLead({...a,...n,id:a.id,createdAt:a.createdAt,status,messages:[...(a.messages??[]),...(n.lastMessage?[{text:n.lastMessage,createdAt:n.updatedAt}]:[])],operatorNote:n.operatorNote||a.operatorNote,nextFollowUp:n.nextFollowUp||a.nextFollowUp,paymentStatus:n.paymentStatus||a.paymentStatus});}
 function normalizeLead(l:Lead):Lead{return{...l,updatedAt:l.updatedAt??l.createdAt,city:l.city??'',workStatus:l.workStatus??'',goal:l.goal??'',paymentOption:l.paymentOption??'',status:(l.status as LeadStatus)??'New',source:l.source??'unknown',intent:l.intent??'',lastMessage:l.lastMessage??l.notes??'',messages:l.messages??[],operatorNote:l.operatorNote??'',nextFollowUp:l.nextFollowUp??'',paymentStatus:l.paymentStatus??'',preferredTime:l.preferredTime??'',phone:l.phone??'',age:l.age??'',experience:l.experience??'',fullName:l.fullName??''};}

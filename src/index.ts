@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
-import { courseInfo, formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
+import { formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
 import { isAdmin, notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
-import { createRegistrationScene, mainMenu, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
+import { createRegistrationScene, mainMenu, phoneRequestKeyboard, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
 import { answerWithAiAgent, extractPhoneNumber, getPhoneRequestAnswer, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic } from './aiAgent.js';
 import { configureLeadWebhookSigning, deliverLeadWebhook } from './webhook.js';
 import type { BotContext, Lead, LeadSource } from './types.js';
@@ -225,7 +225,8 @@ async function bootstrap(): Promise<void> {
   bot.hears('Manzil va jadval', (ctx) => ctx.reply(formatLocationAndSchedule(), mainMenu()));
   bot.hears('Maxfiylik', (ctx) => ctx.reply(formatPrivacyInfo(), mainMenu()));
   bot.hears('Operator bilan bog‘lanish', async (ctx) => {
-    await ctx.reply([`👨‍💼 Operator: ${courseInfo.operator}`, `📞 Telefon: ${courseInfo.phone}`, `📣 Kanal: ${courseInfo.channel}`].join('\n'), mainMenu());
+    ctx.session.waitingForCallPhone = { message: 'Operator bilan bog‘lanish' };
+    await ctx.reply(getPhoneRequestAnswer('Operator bilan bog‘lanish'), phoneRequestKeyboard());
   });
 
   registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken);

@@ -21,20 +21,7 @@ export class JsonLeadStore {
       return { lead, created: true };
     }
 
-    const existing = normalizeLead(db.leads[index]);
-    const nextStatus = STATUS_PRIORITY[lead.status] > STATUS_PRIORITY[existing.status] ? lead.status : existing.status;
-    const merged: Lead = {
-      ...existing,
-      ...lead,
-      id: existing.id,
-      createdAt: existing.createdAt,
-      updatedAt: lead.updatedAt,
-      status: nextStatus,
-      messages: [...(existing.messages ?? []), ...(lead.lastMessage ? [{ text: lead.lastMessage, createdAt: lead.updatedAt }] : [])],
-      operatorNote: lead.operatorNote || existing.operatorNote,
-      nextFollowUp: lead.nextFollowUp || existing.nextFollowUp,
-      paymentStatus: lead.paymentStatus || existing.paymentStatus,
-    };
+    const merged = mergeLeadRecords(db.leads[index], lead);
     db.leads[index] = merged;
     await this.writeDatabase(db);
     return { lead: merged, created: false };
@@ -90,6 +77,26 @@ export class JsonFollowUpStore {
 }
 
 function normalizeLead(lead: Lead): Lead { return { ...lead, updatedAt: lead.updatedAt ?? lead.createdAt, city: lead.city ?? (lead as unknown as { district?: string }).district ?? '', workStatus: lead.workStatus ?? '', goal: lead.goal ?? '', paymentOption: lead.paymentOption ?? '', status: normalizeStatus(lead.status), source: lead.source ?? 'unknown', campaignId: lead.campaignId ?? '', studentStatus: lead.studentStatus ?? 'NotEnrolled', agentActionCount: lead.agentActionCount ?? 0, lastAgentAction: lead.lastAgentAction ?? '', lastAgentAt: lead.lastAgentAt ?? '', intent: lead.intent ?? '', lastMessage: lead.lastMessage ?? lead.notes ?? '', messages: lead.messages ?? [], operatorNote: lead.operatorNote ?? '', nextFollowUp: lead.nextFollowUp ?? '', paymentStatus: lead.paymentStatus ?? '' }; }
+export function mergeLeadRecords(existingLead: Lead, incomingLead: Lead): Lead {
+  const existing = normalizeLead(existingLead);
+  const nextStatus = STATUS_PRIORITY[incomingLead.status] > STATUS_PRIORITY[existing.status] ? incomingLead.status : existing.status;
+  return normalizeLead({
+    ...existing,
+    ...incomingLead,
+    id: existing.id,
+    createdAt: existing.createdAt,
+    updatedAt: incomingLead.updatedAt,
+    phone: incomingLead.phone.trim() || existing.phone,
+    goal: incomingLead.goal.trim() || existing.goal,
+    source: incomingLead.source && incomingLead.source !== 'unknown' ? incomingLead.source : existing.source,
+    campaignId: incomingLead.campaignId?.trim() || existing.campaignId,
+    status: nextStatus,
+    messages: [...(existing.messages ?? []), ...(incomingLead.lastMessage ? [{ text: incomingLead.lastMessage, createdAt: incomingLead.updatedAt }] : [])],
+    operatorNote: incomingLead.operatorNote || existing.operatorNote,
+    nextFollowUp: incomingLead.nextFollowUp || existing.nextFollowUp,
+    paymentStatus: incomingLead.paymentStatus || existing.paymentStatus,
+  });
+}
 function normalizeStatus(status: string): LeadStatus { if (status === 'new' || status === 'notified') return 'New'; return (status as LeadStatus) ?? 'New'; }
 async function atomicWriteJson(filePath: string, data: unknown): Promise<void> { await mkdir(path.dirname(filePath), { recursive: true }); const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`; await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8'); await rename(tmp, filePath); }
 function csvEscape(value: string): string { if (!/[",\n\r]/.test(value)) return value; return `"${value.replaceAll('"', '""')}"`; }

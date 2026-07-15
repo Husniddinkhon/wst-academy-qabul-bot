@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test, { afterEach } from 'node:test';
-import { configureLeadWebhookSigning, createAcademyHeaders, sendLeadWebhook, toAcademyWebhookPayload } from '../src/webhook.js';
+import { configureLeadWebhookSigning, createAcademyHeaders, deliverLeadWebhook, sendLeadWebhook, toAcademyWebhookPayload } from '../src/webhook.js';
+import type { JsonWebhookFailureStore } from '../src/storage.js';
 import type { Lead } from '../src/types.js';
 
 const lead: Lead = {
@@ -68,4 +69,17 @@ test('Academy payload omits absent optional values and never grants access', () 
   assert.equal(payload.payment_status, 'paid');
   assert.equal('enrollment_status' in payload, false);
   assert.equal('course_access' in payload, false);
+});
+
+test('timed out webhook is persisted and returns control to the lead flow', async () => {
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+  })) as typeof fetch;
+  const failures: unknown[] = [];
+  const store = { async add(value: unknown) { failures.push(value); } } as JsonWebhookFailureStore;
+
+  await deliverLeadWebhook('https://academy.example/api/v1/admissions/bot-leads', store, 'lead_created', lead, 5);
+
+  assert.equal(failures.length, 1);
+  assert.match(String((failures[0] as { lastError?: string }).lastError), /timed out/);
 });

@@ -21,6 +21,7 @@ const phoneButton = Markup.keyboard([[Markup.button.contactRequest('Telefon raqa
 
 export const REGISTRATION_SCENE_ID = 'registration';
 export function mainMenu() { return registerButton; }
+export function phoneRequestKeyboard() { return phoneButton; }
 export function startInlineMenu() {
   return Markup.inlineKeyboard([
     [Markup.button.callback('Bepul mini-dars', 'academy_lesson'), Markup.button.callback('Bilim testi', 'academy_quiz')],
