@@ -18,6 +18,7 @@ export interface AiAgentResult {
 }
 
 const PHONE_PATTERN = /(?:\+?998[\s()\-.]*)?(?:\d[\s()\-.]*){9}/;
+const AI_REQUEST_TIMEOUT_MS = 15_000;
 
 const HOT_PATTERNS = [
   /\b(narx|qancha|necha pul|to['‘’`]?lov|tolov|bo['‘’`]?lib|bolib|muddatli|rassrochka|boshlan|start)\b/i,
@@ -121,27 +122,50 @@ export async function answerWithAiAgent(message: string, config: AiConfig): Prom
     throw new Error('AI agent is not fully configured.');
   }
 
-  const response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: config.model,
-      temperature: config.temperature,
-      messages: [
-        { role: 'system', content: buildSystemPrompt(cyrillic) },
-        { role: 'user', content: message },
-      ],
-    }),
-  });
+  const requestBody: Record<string, unknown> = {
+    model: config.model,
+    temperature: config.temperature,
+    messages: [
+      { role: 'system', content: buildSystemPrompt(cyrillic) },
+      { role: 'user', content: message },
+    ],
+  };
+
+  // DeepSeek V4 defaults to thinking mode. A short Telegram sales reply does
+  // not need chain-of-thought; disabling it reduces latency/cost and ensures
+  // the final answer is returned in the OpenAI-compatible `content` field.
+  if (isDeepSeekBaseUrl(config.baseUrl)) {
+    requestBody.thinking = { type: 'disabled' };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+  let response: Response;
+
+  try {
+    response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('AI provider request timed out.');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     throw new Error(`AI provider returned ${response.status}`);
   }
 
-  const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  const data = (await response.json()) as { choices?: Array<{ message?: { content?: string | null } }> };
   const answer = formatAiAnswer(data.choices?.[0]?.message?.content);
 
   if (!answer) {
@@ -208,11 +232,20 @@ function asksProgram(message: string): boolean {
   return /\b(dastur|programma|nima\s+o['‘’`]?rgan|nimalarni\s+o['‘’`]?rgan|yana\s+nimalarni|kamera|dvr|nvr|ip\s+tarmoq|kabel|nosozlik)\b/i.test(message) || /\b(дастур|программа|нима\s+ўрган|нималарни\s+ўрган|камера|кабель|носозлик)\b/i.test(message);
 }
 
-function formatAiAnswer(answer?: string): string | undefined {
+function formatAiAnswer(answer?: string | null): string | undefined {
   return answer
     ?.replace(/UZS/gi, 'so‘m')
     .replace(/[*_#]/g, '')
     .trim();
+}
+
+function isDeepSeekBaseUrl(baseUrl: string): boolean {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    return hostname === 'api.deepseek.com' || hostname.endsWith('.api.deepseek.com');
+  } catch {
+    return false;
+  }
 }
 
 function buildSystemPrompt(cyrillic: boolean): string {
