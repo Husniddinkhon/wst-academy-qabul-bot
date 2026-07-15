@@ -12,6 +12,7 @@
     "content:verify": "node scripts/verify-channel-assets.mjs",
     "content:schedule": "tsx scripts/schedule-channel-series.ts",
     "content:set-avatar": "tsx scripts/set-channel-avatar.ts",
+    "pm2:audit-env": "node scripts/audit-pm2-env.mjs",
     "start": "node dist/index.js"
   },
   "keywords": [

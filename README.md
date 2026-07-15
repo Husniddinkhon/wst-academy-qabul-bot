@@ -118,10 +118,36 @@ The `data/*.json` files are ignored by Git to avoid committing personal lead dat
 2. Create a production `.env` file with `BOT_TOKEN`, `ADMIN_IDS`, and optional `LEADS_FILE`.
 3. Optionally set `LEAD_WEBHOOK_URL` for generic forwarding, or configure both signing variables for Academy delivery.
 4. Run `npm run build`.
-5. Start with `npm start` under a process manager such as PM2 or systemd.
+5. Start or reload only through the tracked PM2 ecosystem file below.
 
-Example PM2 command:
+### Production PM2 runbook
+
+The bot deliberately loads its own `/opt/wst-academy-qabul-bot/.env` through
+`dotenv`. PM2 must not copy the deployment shell, Academy Portal, database,
+JWT, trusted-host, or other service secrets into the bot process. The tracked
+ecosystem uses `filter_env: true` and injects only `NODE_ENV=production`.
+
+Keep `.env` readable only by the service owner and never source another
+application's environment before deployment:
 
 ```bash
-pm2 start dist/index.js --name wst-academy-qabul-bot
+cd /opt/wst-academy-qabul-bot
+chmod 600 .env
+npm ci
+npm run build
+npm test
+npm run content:verify
+
+env -i HOME=/root PATH=/usr/bin:/bin PM2_HOME=/root/.pm2 \
+  /usr/bin/pm2 startOrReload ecosystem.config.cjs \
+  --only wst-academy-qabul-bot --update-env
+/usr/bin/pm2 save
+npm run pm2:audit-env
 ```
+
+Before and after a reload, record the channel post status counts and next
+scheduled timestamp with the admin-only `/ops_report`. The counts and next
+timestamp must remain unchanged; a reload never uses Telegram's
+`dropPendingUpdates` option. If the env audit reports a forbidden key name,
+do not print its value: stop the release, correct the PM2 declaration, and
+reload once from the clean command above.
