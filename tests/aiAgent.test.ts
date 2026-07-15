@@ -53,3 +53,68 @@ test('other OpenAI-compatible providers do not receive a DeepSeek-only parameter
     globalThis.fetch = originalFetch;
   }
 });
+
+test('uses the fallback provider when the primary provider fails', async () => {
+  const originalFetch = globalThis.fetch;
+  const calledUrls: string[] = [];
+
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    calledUrls.push(url);
+    if (url.startsWith('https://api.deepseek.com')) {
+      return new Response('unavailable', { status: 503 });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: 'Qwen fallback javobi.' } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  try {
+    const result = await answerWithAiAgent('Yordam bera olasizmi?', {
+      ...baseConfig,
+      fallback: {
+        provider: 'openai_compatible',
+        apiKey: 'fallback-test-key',
+        baseUrl: 'https://qwen.example/compatible-mode/v1',
+        model: 'qwen-flash',
+        temperature: 0.3,
+      },
+    });
+    assert.equal(result.answer, 'Qwen fallback javobi.');
+    assert.deepEqual(calledUrls, [
+      'https://api.deepseek.com/chat/completions',
+      'https://qwen.example/compatible-mode/v1/chat/completions',
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('does not call fallback when the primary provider succeeds', async () => {
+  const originalFetch = globalThis.fetch;
+  let callCount = 0;
+
+  globalThis.fetch = async () => {
+    callCount += 1;
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: 'Primary javob.' } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  try {
+    const result = await answerWithAiAgent('Yordam bera olasizmi?', {
+      ...baseConfig,
+      fallback: {
+        provider: 'openai_compatible',
+        apiKey: 'fallback-test-key',
+        baseUrl: 'https://qwen.example/compatible-mode/v1',
+        model: 'qwen-flash',
+        temperature: 0.3,
+      },
+    });
+    assert.equal(result.answer, 'Primary javob.');
+    assert.equal(callCount, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

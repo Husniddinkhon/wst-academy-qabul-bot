@@ -64,6 +64,7 @@ export function loadConfig(): AppConfig {
   const botToken = process.env.BOT_TOKEN;
   const leadWebhookServiceId = process.env.LEAD_WEBHOOK_SERVICE_ID?.trim() || undefined;
   const leadWebhookSecret = process.env.LEAD_WEBHOOK_SECRET || undefined;
+  const fallbackValues = [process.env.AI_FALLBACK_API_KEY, process.env.AI_FALLBACK_BASE_URL, process.env.AI_FALLBACK_MODEL];
 
   if (!botToken) {
     throw new Error('BOT_TOKEN is required. Copy .env.example to .env and set your Telegram bot token.');
@@ -76,6 +77,9 @@ export function loadConfig(): AppConfig {
   }
   if (leadWebhookServiceId && !process.env.LEAD_WEBHOOK_URL?.trim()) {
     throw new Error('LEAD_WEBHOOK_URL is required when signed Academy webhook delivery is enabled.');
+  }
+  if (fallbackValues.some(Boolean) && !fallbackValues.every(Boolean)) {
+    throw new Error('AI_FALLBACK_API_KEY, AI_FALLBACK_BASE_URL and AI_FALLBACK_MODEL must be configured together.');
   }
 
   return {
@@ -105,6 +109,15 @@ export function loadConfig(): AppConfig {
       baseUrl: process.env.AI_BASE_URL || undefined,
       model: process.env.AI_MODEL || undefined,
       temperature: parseTemperature(process.env.AI_TEMPERATURE),
+      fallback: fallbackValues.every(Boolean)
+        ? {
+            provider: 'openai_compatible',
+            apiKey: process.env.AI_FALLBACK_API_KEY,
+            baseUrl: process.env.AI_FALLBACK_BASE_URL,
+            model: process.env.AI_FALLBACK_MODEL,
+            temperature: parseTemperature(process.env.AI_FALLBACK_TEMPERATURE),
+          }
+        : undefined,
     },
   };
 }

@@ -2,13 +2,17 @@ import { courseInfo } from './course.js';
 
 export type LeadScore = 'HOT' | 'WARM' | 'COLD';
 
-export interface AiConfig {
-  enabled: boolean;
+export interface AiProviderConfig {
   provider: 'openai_compatible';
   apiKey?: string;
   baseUrl?: string;
   model?: string;
   temperature: number;
+}
+
+export interface AiConfig extends AiProviderConfig {
+  enabled: boolean;
+  fallback?: AiProviderConfig;
 }
 
 export interface AiAgentResult {
@@ -122,6 +126,26 @@ export async function answerWithAiAgent(message: string, config: AiConfig): Prom
     throw new Error('AI agent is not fully configured.');
   }
 
+  try {
+    const answer = await requestProvider(message, cyrillic, config);
+    return { answer, ...scored };
+  } catch (primaryError) {
+    if (!isProviderReady(config.fallback)) throw primaryError;
+
+    try {
+      const answer = await requestProvider(message, cyrillic, config.fallback);
+      return { answer, ...scored };
+    } catch {
+      throw new Error('Primary and fallback AI providers are unavailable.');
+    }
+  }
+}
+
+async function requestProvider(message: string, cyrillic: boolean, config: AiProviderConfig): Promise<string> {
+  if (!isProviderReady(config)) {
+    throw new Error('AI provider is not fully configured.');
+  }
+
   const requestBody: Record<string, unknown> = {
     model: config.model,
     temperature: config.temperature,
@@ -172,7 +196,7 @@ export async function answerWithAiAgent(message: string, config: AiConfig): Prom
     throw new Error('AI provider returned an empty answer.');
   }
 
-  return { answer, ...scored };
+  return answer;
 }
 
 export function getTruthfulFallbackAnswer(message = ''): string {
@@ -191,7 +215,11 @@ export function getUnrelatedTopicAnswer(message: string): string {
 }
 
 export function isAiReady(config: AiConfig): boolean {
-  return Boolean(config.enabled && config.apiKey && config.baseUrl && config.model);
+  return Boolean(config.enabled && isProviderReady(config));
+}
+
+function isProviderReady(config?: AiProviderConfig): config is AiProviderConfig & Required<Pick<AiProviderConfig, 'apiKey' | 'baseUrl' | 'model'>> {
+  return Boolean(config?.apiKey && config.baseUrl && config.model);
 }
 
 export function isCallRequest(message: string): boolean {
