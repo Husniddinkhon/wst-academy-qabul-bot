@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { Pool, type PoolClient } from 'pg';
-import { JsonFollowUpStore, JsonLeadStore, mergeLeadRecords, type LeadUpsertResult } from './storage.js';
+import { JsonFollowUpStore, JsonLeadStore, mergeLeadRecords, type FunnelEventMetrics, type LeadUpsertResult } from './storage.js';
 import type { FollowUpState, Lead, LeadStatus } from './types.js';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export class PostgresStorage {
   readonly pool: Pool;
@@ -21,6 +21,7 @@ export class PostgresStorage {
       await client.query(`CREATE INDEX IF NOT EXISTS followups_due_idx ON followups(last_sent_at, count)`);
       await client.query(`CREATE TABLE IF NOT EXISTS conversation_events (id bigserial PRIMARY KEY, telegram_id bigint NOT NULL, event_type text NOT NULL, payload jsonb NOT NULL DEFAULT '{}'::jsonb, idempotency_key text UNIQUE, created_at timestamptz NOT NULL DEFAULT now())`);
       await client.query(`CREATE INDEX IF NOT EXISTS conversation_events_lead_idx ON conversation_events(telegram_id, created_at DESC)`);
+      await client.query(`CREATE INDEX IF NOT EXISTS conversation_events_created_at_idx ON conversation_events(created_at DESC)`);
       await importJson(client, leadsFile, followupsFile);
       await client.query('INSERT INTO schema_migrations(version) VALUES ($1) ON CONFLICT DO NOTHING', [SCHEMA_VERSION]);
       await client.query('COMMIT');
@@ -57,6 +58,30 @@ export class PostgresLeadStore extends JsonLeadStore {
   override async last(limit=10): Promise<Lead[]> { return (await this.all()).slice(0,limit); }
   override async stats(){const l=await this.all(),now=new Date(),d=new Date(now);d.setDate(d.getDate()-7);return{total:l.length,today:(await this.today(now)).length,last7Days:l.filter(x=>new Date(x.createdAt)>=d).length,hot:l.filter(x=>x.status==='Hot').length,callRequests:l.filter(x=>x.status==='CallRequested').length,completed:l.filter(x=>x.status==='RegistrationCompleted').length,noPhone:l.filter(x=>!x.phone).length};}
   override async toCsv(leads?: Lead[]): Promise<string> { return super.toCsv(leads ?? await this.all()); }
+  override async getFunnelEventMetrics(from: Date, toExclusive: Date): Promise<FunnelEventMetrics> {
+    const result = await this.pg.pool.query(`
+      WITH first_transitions AS (
+        SELECT telegram_id,
+          min(created_at) FILTER (WHERE event_type = 'lead_created') AS lead_created_at,
+          min(created_at) FILTER (WHERE payload->>'ai_score' = 'HOT') AS first_hot_at,
+          min(created_at) FILTER (WHERE payload->>'status' = 'RegistrationCompleted') AS first_registration_at
+        FROM conversation_events
+        WHERE created_at < $2
+        GROUP BY telegram_id
+      )
+      SELECT
+        count(*) FILTER (WHERE lead_created_at >= $1 AND lead_created_at < $2)::int AS lead_creations_tracked,
+        count(*) FILTER (WHERE first_hot_at >= $1 AND first_hot_at < $2)::int AS hot_escalations,
+        count(*) FILTER (WHERE first_registration_at >= $1 AND first_registration_at < $2)::int AS registrations
+      FROM first_transitions
+    `, [from, toExclusive]);
+    return {
+      available: true,
+      leadCreationsTracked: Number(result.rows[0]?.lead_creations_tracked ?? 0),
+      hotEscalations: Number(result.rows[0]?.hot_escalations ?? 0),
+      registrations: Number(result.rows[0]?.registrations ?? 0),
+    };
+  }
 }
 
 export class PostgresFollowUpStore extends JsonFollowUpStore {

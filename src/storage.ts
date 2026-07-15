@@ -10,6 +10,7 @@ interface FollowUpDatabase { followups: FollowUpState[]; }
 export const STATUS_PRIORITY: Record<LeadStatus, number> = { New: 1, Warm: 2, Hot: 3, RegistrationCompleted: 4, CallRequested: 5, OperatorContacted: 6, Paid: 7, Rejected: 0 };
 const AI_SCORE_PRIORITY = { COLD: 1, WARM: 2, HOT: 3 } as const;
 export interface LeadUpsertResult { lead: Lead; created: boolean; hotEscalated: boolean }
+export interface FunnelEventMetrics { available: boolean; leadCreationsTracked: number; hotEscalations: number; registrations: number }
 
 export class JsonLeadStore {
   constructor(private readonly filePath: string) {}
@@ -59,6 +60,7 @@ export class JsonLeadStore {
     const headers: (keyof Lead)[] = ['id','createdAt','updatedAt','telegramId','username','firstName','lastName','fullName','phone','city','age','workStatus','experience','goal','paymentOption','status','source','campaignId','studentStatus','agentActionCount','lastAgentAction','lastAgentAt','aiLeadScore','aiLeadReason','intent','lastMessage','operatorNote','nextFollowUp','paymentStatus','preferredTime','notes'];
     return [headers.join(','), ...exportLeads.map((lead) => headers.map((h) => csvEscape(String(lead[h] ?? ''))).join(','))].join('\n');
   }
+  async getFunnelEventMetrics(_from: Date, _toExclusive: Date): Promise<FunnelEventMetrics> { return { available: false, leadCreationsTracked: 0, hotEscalations: 0, registrations: 0 }; }
   private async readDatabase(): Promise<LeadDatabase> { try { const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as LeadDatabase; return { leads: Array.isArray(parsed.leads) ? parsed.leads : [] }; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { leads: [] }; throw e; } }
   private async writeDatabase(db: LeadDatabase): Promise<void> { await atomicWriteJson(this.filePath, db); }
 }

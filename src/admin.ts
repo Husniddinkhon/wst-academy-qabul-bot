@@ -5,6 +5,7 @@ import { formatLead, formatLeadList } from './messages.js';
 import { deliverLeadWebhook, retryFailedWebhooks } from './webhook.js';
 import type { JsonChannelPostStore } from './channelPosts.js';
 import { publishChannelPost } from './channelPublisher.js';
+import { buildSalesReport, createAcademyMetricsLoader, formatSalesReport, parseSalesReportRange } from './salesReporting.js';
 import { formatTashkentSchedule, parseTashkentSchedule } from './channelScheduler.js';
 
 const HOT_LEAD_COOLDOWN_MS = 30 * 60 * 1000;
@@ -79,7 +80,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '/hot_leads — hot leadlar',
       '/call_requests — qo‘ng‘iroq so‘ragan leadlar',
       '/stats — umumiy statistika',
-      '/sales_report — заявкадан active studentgacha funnel',
+      '/sales_report [YYYY-MM-DD] [YYYY-MM-DD] — далилга асосланган funnel/KPI',
       '/set_student <telegram_id> <status> — o‘quvchi holati',
       '/export_csv — barcha leadlarni CSV qilish',
       '/lead <telegram_id> — bitta leadni ko‘rish',
@@ -244,15 +245,19 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
   bot.command('stats', async (ctx) => { if (!(await guard(ctx))) return; const s = await store.stats(); return ctx.reply([`📊 Statistika`,`Jami leadlar: ${s.total}`,`Bugun: ${s.today}`,`Oxirgi 7 kun: ${s.last7Days}`,`Hot: ${s.hot}`,`Call requests: ${s.callRequests}`,`Completed: ${s.completed}`,`No phone: ${s.noPhone}`].join('\n')); });
   bot.command('sales_report', async (ctx) => {
     if (!(await guard(ctx))) return;
-    const leads = await store.all();
-    const registered = leads.filter((lead) => lead.status === 'RegistrationCompleted' || lead.status === 'Paid').length;
-    const paid = leads.filter((lead) => lead.status === 'Paid').length;
-    const active = leads.filter((lead) => lead.studentStatus === 'Active').length;
-    const completed = leads.filter((lead) => lead.studentStatus === 'Completed').length;
-    const withPhone = leads.filter((lead) => Boolean(lead.phone)).length;
-    const agentWorked = leads.filter((lead) => (lead.agentActionCount ?? 0) > 0).length;
-    const conversion = leads.length ? ((active / leads.length) * 100).toFixed(1) : '0.0';
-    return ctx.reply(['📈 Sales funnel', `Jami заявка: ${leads.length}`, `Agent ishlagan leadlar: ${agentWorked}`, `Telefon olingan: ${withPhone}`, `Ro‘yxatdan o‘tgan: ${registered}`, `To‘lov tasdiqlangan: ${paid}`, `Haqiqatan o‘qiyapti: ${active}`, `Kursni tugatgan: ${completed}`, `Lead → active conversion: ${conversion}%`].join('\n'));
+    const args = commandText(ctx).trim().split(/\s+/).slice(1);
+    try {
+      const range = parseSalesReportRange(args);
+      const snapshot = await buildSalesReport(range, {
+        store,
+        failureStore,
+        academyMetrics: createAcademyMetricsLoader(process.env.REPORT_DATABASE_URL),
+      });
+      return ctx.reply(formatSalesReport(snapshot));
+    } catch (error) {
+      console.error('Sales KPI report failed:', error instanceof Error ? error.message : String(error));
+      return ctx.reply(error instanceof Error && /Format:|Sana|Noto‘g‘ri/.test(error.message) ? error.message : 'Sales KPI hisoboti vaqtincha mavjud emas.');
+    }
   });
   bot.command('set_student', async (ctx) => {
     if (!(await guard(ctx))) return;
