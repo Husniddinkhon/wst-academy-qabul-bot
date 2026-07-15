@@ -5,6 +5,7 @@ import { formatLead, formatLeadList } from './messages.js';
 import { deliverLeadWebhook, retryFailedWebhooks } from './webhook.js';
 import type { JsonChannelPostStore } from './channelPosts.js';
 import { publishChannelPost } from './channelPublisher.js';
+import { formatTashkentSchedule, parseTashkentSchedule } from './channelScheduler.js';
 
 const HOT_LEAD_COOLDOWN_MS = 30 * 60 * 1000;
 const lastHotLeadAtByTelegramId = new Map<number, number>();
@@ -69,6 +70,8 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '/channel_draft <text> — kanal posti drafti',
       '/channel_posts — oxirgi kanal postlari',
       '/channel_publish <id> — draftni kanalga yuborish',
+      '/channel_schedule <id> <YYYY-MM-DD> <HH:mm> [campaign] — admin tasdiqlagan postni Toshkent vaqti bilan rejalash',
+      '/channel_cancel <id> — rejalangan postni bekor qilish',
       '/channel_retry <id> — xato bo‘lgan postni qayta yuborish',
       '/channel_report — subscriber, post va lead hisoboti',
       '/leads_today — bugungi leadlar',
@@ -180,21 +183,40 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
   bot.command('channel_posts', async (ctx) => {
     if (!(await guard(ctx))) return;
     const posts = await channelPosts.last();
-    return ctx.reply(posts.length ? posts.map((post) => `${post.id} | ${post.status} | ${post.text.slice(0, 80)}`).join('\n') : 'Kanal postlari yo‘q.');
+    return ctx.reply(posts.length ? posts.map((post) => `${post.id} | ${post.status}${post.scheduledAt ? ` | ${formatTashkentSchedule(new Date(post.scheduledAt))} Tashkent` : ''} | ${post.photoFileId ? 'PHOTO' : 'TEXT'} | ${post.text.slice(0, 80)}`).join('\n') : 'Kanal postlari yo‘q.');
+  });
+
+  bot.command('channel_schedule', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const [, id, date, time, campaignId] = commandText(ctx).split(/\s+/);
+    const scheduledAt = date && time ? parseTashkentSchedule(`${date} ${time}`) : undefined;
+    if (!id || !scheduledAt || !ctx.from?.id) return ctx.reply('Format: /channel_schedule <id> <YYYY-MM-DD> <HH:mm> [campaign]\nVaqt Asia/Tashkent bo‘yicha.');
+    if (new Date(scheduledAt) <= new Date()) return ctx.reply('Rejalangan vaqt kelajakda bo‘lishi kerak.');
+    const result = await channelPosts.schedule(id, scheduledAt, ctx.from.id, campaignId);
+    if (result.ok) return ctx.reply(`Post tasdiqlandi va rejalandi: ${result.post.id}\n${formatTashkentSchedule(new Date(result.post.scheduledAt!))} Asia/Tashkent`);
+    return ctx.reply(result.reason === 'not_found' ? 'Post topilmadi.' : `Bu postni rejalab bo‘lmaydi. Holat: ${result.post?.status ?? 'unknown'}.`);
+  });
+
+  bot.command('channel_cancel', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const id = commandText(ctx).split(/\s+/)[1];
+    if (!id || !ctx.from?.id) return ctx.reply('Format: /channel_cancel <id>');
+    const result = await channelPosts.cancel(id, ctx.from.id);
+    if (result.ok) return ctx.reply(`Reja bekor qilindi: ${result.post.id}`);
+    return ctx.reply(result.reason === 'not_found' ? 'Post topilmadi.' : `Bekor qilib bo‘lmaydi. Holat: ${result.post?.status ?? 'unknown'}.`);
   });
 
   bot.command('channel_report', async (ctx) => {
     if (!(await guard(ctx))) return;
-    const [memberResponse, posts, leads] = await Promise.all([
+    const [memberResponse, leads] = await Promise.all([
       fetch(`https://api.telegram.org/bot${botToken}/getChatMemberCount?chat_id=${encodeURIComponent(channelChatId)}`).then((response) => response.json()) as Promise<{ ok: boolean; result?: number }>,
-      channelPosts.all(),
       store.all(),
     ]);
-    const published = posts.filter((post) => post.status === 'Published').length;
+    const postStats = await channelPosts.stats();
     const channelLeads = leads.filter((lead) => lead.source === 'channel').length;
     const adsLeads = leads.filter((lead) => lead.source === 'telegram_ads').length;
     const activeStudents = leads.filter((lead) => lead.studentStatus === 'Active').length;
-    return ctx.reply(['📣 Channel report', `Obunachilar: ${memberResponse.ok ? memberResponse.result : 'ERROR'}`, `Published postlar: ${published}`, `Channel leadlar: ${channelLeads}`, `Telegram Ads leadlar: ${adsLeads}`, `Active studentlar: ${activeStudents}`].join('\n'));
+    return ctx.reply(['📣 Channel report', `Obunachilar: ${memberResponse.ok ? memberResponse.result : 'ERROR'}`, `Draft: ${postStats.Draft}`, `Scheduled: ${postStats.Scheduled}`, `Due: ${postStats.due}`, `Publishing: ${postStats.Publishing}`, `Published: ${postStats.Published}`, `Failed/manual review: ${postStats.Failed}`, `Cancelled: ${postStats.Cancelled}`, `Channel leadlar: ${channelLeads}`, `Telegram Ads leadlar: ${adsLeads}`, `Active studentlar: ${activeStudents}`].join('\n'));
   });
 
   const publish = async (ctx: BotContext, retryFailed: boolean): Promise<unknown> => {
@@ -207,6 +229,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       console.error('Channel publish failed:', result.error);
       return ctx.reply(`Kanalga yuborilmadi: ${result.error}\nQayta urinish: /channel_retry ${id}`);
     }
+    if (result.reason === 'campaign_expired') return ctx.reply(`Post yuborilmadi: aksiya muddati tugagan. ${result.error}`);
     if (result.reason === 'not_found') return ctx.reply('Post topilmadi.');
     return ctx.reply(`Post yuborib bo‘lmaydi. Hozirgi holat: ${result.post?.status ?? 'unknown'}.`);
   };

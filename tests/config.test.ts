@@ -86,3 +86,23 @@ test('rejects unsafe AI reliability control values without printing secrets', ()
   process.env.AI_MAX_OUTPUT_TOKENS = '0';
   assert.throws(() => loadConfig(), /AI_MAX_OUTPUT_TOKENS/);
 });
+
+test('loads bounded channel scheduler controls', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.CHANNEL_SCHEDULER_ENABLED = 'false';
+  process.env.CHANNEL_SCHEDULER_POLL_MS = '45000';
+  process.env.CHANNEL_PUBLISH_STALE_MS = '900000';
+  const config = loadConfig();
+  assert.equal(config.channelSchedulerEnabled, false);
+  assert.equal(config.channelSchedulerPollMs, 45_000);
+  assert.equal(config.channelPublishStaleMs, 900_000);
+});
+
+test('rejects unsafe channel scheduler controls', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.CHANNEL_SCHEDULER_POLL_MS = '100';
+  assert.throws(() => loadConfig(), /CHANNEL_SCHEDULER_POLL_MS/);
+  process.env.CHANNEL_SCHEDULER_POLL_MS = '30000';
+  process.env.CHANNEL_PUBLISH_STALE_MS = '0';
+  assert.throws(() => loadConfig(), /CHANNEL_PUBLISH_STALE_MS/);
+});

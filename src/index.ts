@@ -16,6 +16,7 @@ import { BACK_BUTTON, CALCULATOR_BUTTON, LESSON_BUTTON, MENU_BUTTON, NEXT_BUTTON
 import { parseStartAttribution, resetSessionForStart } from './startFlow.js';
 import { classifyProductLead, getProductSalesAnswer, isProductSalesQuestion, productLeadReason, UNV_CAMPAIGN_ID } from './productSales.js';
 import { isPermittedSalesConversation, persistSalesConversation } from './salesConversation.js';
+import { startChannelScheduler } from './channelScheduler.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -373,12 +374,17 @@ async function bootstrap(): Promise<void> {
     { command: 'lead', description: 'Leadni Telegram ID bilan topish (admin)' },
     { command: 'set_status', description: 'Lead statusini yangilash (admin)' },
     { command: 'operator_note', description: 'Leadga operator izohi (admin)' },
+    { command: 'channel_schedule', description: 'Tasdiqlangan postni rejalash (admin)' },
+    { command: 'channel_cancel', description: 'Rejalangan postni bekor qilish (admin)' },
   ];
   await bot.telegram.setMyCommands(publicCommands, { scope: { type: 'default' } });
   await Promise.all(config.adminIds.map((chatId) => bot.telegram.setMyCommands([...publicCommands, ...adminCommands.slice(1)], { scope: { type: 'chat', chat_id: chatId } })));
 
   const followUpTimer = startFollowUpAutomation(bot, store, followUpStore);
   const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);
+  const channelSchedulerTimer = config.channelSchedulerEnabled
+    ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelPublishStaleMs)
+    : undefined;
 
   await bot.launch({ dropPendingUpdates: config.isProduction });
   console.log('WST Academy qabul bot is running.');
@@ -387,6 +393,7 @@ async function bootstrap(): Promise<void> {
     console.log(`Received ${signal}. Stopping bot...`);
     clearInterval(followUpTimer);
     if (dailyReportTimer) clearInterval(dailyReportTimer);
+    if (channelSchedulerTimer) clearInterval(channelSchedulerTimer);
     bot.stop(signal);
     if (postgres) await postgres.close();
     process.exit(0);
