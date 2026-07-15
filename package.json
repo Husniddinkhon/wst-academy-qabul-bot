@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "backfill:lead-events": "tsx src/backfillEventsCli.ts",
     "test": "tsx --test tests/*.test.ts",
     "start": "node dist/index.js"
   },
