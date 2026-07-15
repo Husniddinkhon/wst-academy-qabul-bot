@@ -8,23 +8,26 @@ interface FailedWebhookDatabase { payloads: FailedWebhookPayload[]; }
 interface FollowUpDatabase { followups: FollowUpState[]; }
 
 export const STATUS_PRIORITY: Record<LeadStatus, number> = { New: 1, Warm: 2, Hot: 3, RegistrationCompleted: 4, CallRequested: 5, OperatorContacted: 6, Paid: 7, Rejected: 0 };
+const AI_SCORE_PRIORITY = { COLD: 1, WARM: 2, HOT: 3 } as const;
+export interface LeadUpsertResult { lead: Lead; created: boolean; hotEscalated: boolean }
 
 export class JsonLeadStore {
   constructor(private readonly filePath: string) {}
 
-  async upsert(lead: Lead): Promise<{ lead: Lead; created: boolean }> {
+  async upsert(lead: Lead): Promise<LeadUpsertResult> {
     const db = await this.readDatabase();
     const index = db.leads.findIndex((item) => item.telegramId === lead.telegramId);
     if (index === -1) {
       db.leads.push(lead);
       await this.writeDatabase(db);
-      return { lead, created: true };
+      return { lead, created: true, hotEscalated: lead.aiLeadScore === 'HOT' };
     }
 
-    const merged = mergeLeadRecords(db.leads[index], lead);
+    const existing = normalizeLead(db.leads[index]);
+    const merged = mergeLeadRecords(existing, lead);
     db.leads[index] = merged;
     await this.writeDatabase(db);
-    return { lead: merged, created: false };
+    return { lead: merged, created: false, hotEscalated: lead.aiLeadScore === 'HOT' && existing.aiLeadScore !== 'HOT' };
   }
 
   async add(lead: Lead): Promise<void> { await this.upsert(lead); }
@@ -53,7 +56,7 @@ export class JsonLeadStore {
   }
   async toCsv(leads?: Lead[]): Promise<string> {
     const exportLeads = leads ?? (await this.all());
-    const headers: (keyof Lead)[] = ['id','createdAt','updatedAt','telegramId','username','firstName','lastName','fullName','phone','city','age','workStatus','experience','goal','paymentOption','status','source','campaignId','studentStatus','agentActionCount','lastAgentAction','lastAgentAt','intent','lastMessage','operatorNote','nextFollowUp','paymentStatus','preferredTime','notes'];
+    const headers: (keyof Lead)[] = ['id','createdAt','updatedAt','telegramId','username','firstName','lastName','fullName','phone','city','age','workStatus','experience','goal','paymentOption','status','source','campaignId','studentStatus','agentActionCount','lastAgentAction','lastAgentAt','aiLeadScore','aiLeadReason','intent','lastMessage','operatorNote','nextFollowUp','paymentStatus','preferredTime','notes'];
     return [headers.join(','), ...exportLeads.map((lead) => headers.map((h) => csvEscape(String(lead[h] ?? ''))).join(','))].join('\n');
   }
   private async readDatabase(): Promise<LeadDatabase> { try { const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as LeadDatabase; return { leads: Array.isArray(parsed.leads) ? parsed.leads : [] }; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { leads: [] }; throw e; } }
@@ -80,6 +83,9 @@ function normalizeLead(lead: Lead): Lead { return { ...lead, updatedAt: lead.upd
 export function mergeLeadRecords(existingLead: Lead, incomingLead: Lead): Lead {
   const existing = normalizeLead(existingLead);
   const nextStatus = STATUS_PRIORITY[incomingLead.status] > STATUS_PRIORITY[existing.status] ? incomingLead.status : existing.status;
+  const existingScore = existing.aiLeadScore;
+  const incomingScore = incomingLead.aiLeadScore;
+  const keepIncomingScore = Boolean(incomingScore && (!existingScore || AI_SCORE_PRIORITY[incomingScore] >= AI_SCORE_PRIORITY[existingScore]));
   return normalizeLead({
     ...existing,
     ...incomingLead,
@@ -91,6 +97,8 @@ export function mergeLeadRecords(existingLead: Lead, incomingLead: Lead): Lead {
     source: incomingLead.source && incomingLead.source !== 'unknown' ? incomingLead.source : existing.source,
     campaignId: incomingLead.campaignId?.trim() || existing.campaignId,
     status: nextStatus,
+    aiLeadScore: keepIncomingScore ? incomingScore : existingScore,
+    aiLeadReason: keepIncomingScore ? incomingLead.aiLeadReason : existing.aiLeadReason,
     messages: [...(existing.messages ?? []), ...(incomingLead.lastMessage ? [{ text: incomingLead.lastMessage, createdAt: incomingLead.updatedAt }] : [])],
     operatorNote: incomingLead.operatorNote || existing.operatorNote,
     nextFollowUp: incomingLead.nextFollowUp || existing.nextFollowUp,

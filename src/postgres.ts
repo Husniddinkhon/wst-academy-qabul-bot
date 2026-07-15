@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { Pool, type PoolClient } from 'pg';
-import { JsonFollowUpStore, JsonLeadStore, mergeLeadRecords } from './storage.js';
+import { JsonFollowUpStore, JsonLeadStore, mergeLeadRecords, type LeadUpsertResult } from './storage.js';
 import type { FollowUpState, Lead, LeadStatus } from './types.js';
 
 export const SCHEMA_VERSION = 1;
@@ -32,7 +32,7 @@ export class PostgresStorage {
 
 export class PostgresLeadStore extends JsonLeadStore {
   constructor(private readonly pg: PostgresStorage) { super('/dev/null'); }
-  override async upsert(lead: Lead): Promise<{ lead: Lead; created: boolean }> {
+  override async upsert(lead: Lead): Promise<LeadUpsertResult> {
     const client = await this.pg.pool.connect();
     try {
       await client.query('BEGIN');
@@ -40,10 +40,11 @@ export class PostgresLeadStore extends JsonLeadStore {
       const created = current.rowCount === 0;
       const existing = current.rows[0]?.payload as Lead | undefined;
       const merged = existing ? mergeLeadRecords(existing, lead) : normalizeLead(lead);
+      const hotEscalated = lead.aiLeadScore === 'HOT' && existing?.aiLeadScore !== 'HOT';
       await writeLead(client, merged);
-      await client.query('INSERT INTO conversation_events(telegram_id,event_type,payload,idempotency_key) VALUES($1,$2,$3,$4) ON CONFLICT(idempotency_key) DO NOTHING', [lead.telegramId, created ? 'lead_created' : 'lead_updated', { message: lead.lastMessage, status: merged.status }, `${lead.telegramId}:${lead.updatedAt}:${lead.lastMessage}`]);
+      await client.query('INSERT INTO conversation_events(telegram_id,event_type,payload,idempotency_key) VALUES($1,$2,$3,$4) ON CONFLICT(idempotency_key) DO NOTHING', [lead.telegramId, created ? 'lead_created' : 'lead_updated', { message: lead.lastMessage, status: merged.status, intent: lead.intent, ai_score: lead.aiLeadScore, ai_reason: lead.aiLeadReason }, `${lead.telegramId}:${lead.updatedAt}:${lead.lastMessage}`]);
       await client.query('COMMIT');
-      return { lead: merged, created };
+      return { lead: merged, created, hotEscalated };
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
   override async add(lead: Lead): Promise<void> { await this.upsert(lead); }

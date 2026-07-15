@@ -36,6 +36,8 @@ export function toWebhookPayload(event: LeadWebhookEvent, lead: Lead): Record<st
     operator_note: lead.operatorNote,
     next_follow_up: lead.nextFollowUp,
     payment_status: lead.paymentStatus,
+    ai_score: lead.aiLeadScore ?? '',
+    ai_reason: lead.aiLeadReason ?? '',
   };
 }
 
@@ -64,6 +66,8 @@ export function toAcademyWebhookPayload(event: LeadWebhookEvent, lead: Lead): Ac
     last_message: lead.lastMessage || undefined,
     operator_note: lead.operatorNote || undefined,
     next_follow_up: lead.nextFollowUp || undefined,
+    ai_score: lead.aiLeadScore || undefined,
+    ai_reason: lead.aiLeadReason || undefined,
     updated_at: lead.updatedAt,
   };
   return withoutUndefined({

@@ -42,6 +42,7 @@ export function formatCourseIntro(): string {
     `Telefon: ${courseInfo.phone}`,
     '',
     'Kurs ma’lumotlarini ko‘rish uchun shaxsiy ma’lumot yuborish shart emas. Ro‘yxatdan o‘tish ixtiyoriy.',
+    'Kursga oid savollar xizmat ko‘rsatish va takroriy murojaatlarni birlashtirish uchun saqlanishi mumkin. Tafsilotlar “Maxfiylik” bo‘limida.',
   ].join('\n');
 }
 
@@ -68,6 +69,7 @@ export function formatPrivacyInfo(): string {
     'Kurs haqida ma’lumot olish uchun ism yoki telefon yuborish shart emas.',
     'Ro‘yxatdan o‘tish ixtiyoriy. Arizada ism-familiya, telefon, yosh, hudud, tajriba va qulay dars vaqti so‘raladi.',
     'Bu ma’lumotlar faqat arizani ko‘rib chiqish, siz bilan bog‘lanish va mos guruhni taklif qilish uchun ishlatiladi.',
+    'Botga yozilgan kursga oid savollar javob berish, qiziqishni baholash va takroriy murojaatlarni birlashtirish uchun saqlanishi mumkin. Kursga aloqasiz xabarlar lead sifatida saqlanmaydi.',
     'Ma’lumot yubormasdan menyu orqali kurs dasturi, narx, jadval va aloqa ma’lumotlarini ko‘rishingiz mumkin.',
     `Savol yoki ma’lumotni yangilash bo‘yicha operator: ${courseInfo.operator}, ${courseInfo.phone}.`,
   ].join('\n');

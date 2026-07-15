@@ -4,6 +4,7 @@ export type LeadStatus = 'New' | 'Warm' | 'Hot' | 'RegistrationCompleted' | 'Cal
 export type LeadSource = 'telegram_ads' | 'organic' | 'channel' | 'call_request' | 'registration' | 'ai_chat' | 'unknown';
 export type LeadWebhookEvent = 'lead_created' | 'lead_updated' | 'hot_lead' | 'call_request';
 export type StudentStatus = 'NotEnrolled' | 'Enrolled' | 'Active' | 'Completed' | 'Dropped';
+export type AiLeadScore = 'HOT' | 'WARM' | 'COLD';
 
 export interface LeadMessage {
   text: string;
@@ -41,6 +42,8 @@ export interface Lead {
   agentActionCount?: number;
   lastAgentAction?: string;
   lastAgentAt?: string;
+  aiLeadScore?: AiLeadScore;
+  aiLeadReason?: string;
 }
 
 export interface LeadDraft {

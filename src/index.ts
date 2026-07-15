@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
 import { loadConfig } from './config.js';
 import { formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
-import { isAdmin, notifyCallRequestLead, notifyHotLead, registerAdminCommands } from './admin.js';
+import { isAdmin, notifyCallRequestLead, notifyHotLead, notifyScoredHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, phoneRequestKeyboard, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
-import { answerWithAiAgent, extractPhoneNumber, getPhoneRequestAnswer, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic } from './aiAgent.js';
+import { answerWithAiAgent, extractPhoneNumber, getPhoneRequestAnswer, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic, scoreLead } from './aiAgent.js';
 import { configureLeadWebhookSigning, deliverLeadWebhook } from './webhook.js';
 import type { BotContext, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
@@ -15,6 +15,7 @@ import { JsonChannelPostStore } from './channelPosts.js';
 import { BACK_BUTTON, CALCULATOR_BUTTON, LESSON_BUTTON, MENU_BUTTON, NEXT_BUTTON, QUIZ, QUIZ_BUTTON, lessonKeyboard, lessonText, quizKeyboard, quizText, startCalculator, startLesson, startQuiz, storageTerabytes, validateCalculatorValue } from './learning.js';
 import { parseStartAttribution, resetSessionForStart } from './startFlow.js';
 import { classifyProductLead, getProductSalesAnswer, isProductSalesQuestion, productLeadReason, UNV_CAMPAIGN_ID } from './productSales.js';
+import { isPermittedSalesConversation, persistSalesConversation } from './salesConversation.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -110,21 +111,49 @@ async function saveProductSalesLead(ctx: BotContext, store: JsonLeadStore, failu
   }
 }
 
-async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>): Promise<void> {
+async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>, store: JsonLeadStore, failureStore: JsonWebhookFailureStore): Promise<void> {
   if (isUnrelatedTopic(message)) {
     await ctx.reply(getUnrelatedTopicAnswer(message), mainMenu());
     return;
   }
 
+  let result;
   try {
-    const result = await answerWithAiAgent(message, config.ai);
-    await ctx.reply(result.answer, mainMenu());
-
+    result = await answerWithAiAgent(message, config.ai, { actorId: ctx.from?.id ? String(ctx.from.id) : undefined });
   } catch (error) {
     console.error('AI agent failed:', error instanceof Error ? error.message : error);
-    await ctx.reply(getTruthfulFallbackAnswer(message), mainMenu());
+    result = { answer: getTruthfulFallbackAnswer(message), ...scoreLead(message) };
   }
-}
+  await ctx.reply(result.answer, mainMenu());
+  if (!isPermittedSalesConversation(message, result.score)) return;
+
+  const from = ctx.from;
+  if (!from) return;
+  await persistSalesConversation({
+    telegramId: from.id,
+    username: from.username,
+    firstName: from.first_name,
+    lastName: from.last_name,
+    message,
+    score: result.score,
+    reason: result.reason,
+    intent: inferIntent(message),
+    source: ctx.session.source,
+    campaignId: ctx.session.campaignId,
+    phone: extractPhoneNumber(message),
+  }, {
+    store,
+    failureStore,
+    leadWebhookUrl: config.leadWebhookUrl,
+    notifyHotLead: (lead) => notifyScoredHotLead(ctx, config.adminIds, {
+      username: lead.username,
+      telegramId: lead.telegramId,
+      phone: lead.phone || undefined,
+      message: lead.lastMessage,
+      reason: lead.aiLeadReason || 'High sales intent.',
+    }),
+  });
+  }
 
 async function cancelActiveFlow(ctx: BotContext): Promise<void> {
   ctx.session.leadDraft = undefined;
@@ -277,7 +306,7 @@ async function bootstrap(): Promise<void> {
         }
 
         ctx.session.waitingForCallPhone = undefined;
-        await answerSalesAgent(ctx, message, config);
+        await answerSalesAgent(ctx, message, config, store, failureStore);
         return;
       }
 
@@ -302,7 +331,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    await answerSalesAgent(ctx, message, config);
+    await answerSalesAgent(ctx, message, config, store, failureStore);
   });
 
   bot.catch((error, ctx) => {
