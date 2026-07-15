@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { getBotLaunchOptions } from '../src/botLaunch.js';
@@ -44,4 +47,15 @@ test('PM2 drops inherited server environment and injects only non-secret app met
 
 test('production PM2 reload preserves pending Telegram updates', () => {
   assert.deepEqual(getBotLaunchOptions({ isProduction: true }), { dropPendingUpdates: false });
+});
+
+test('systemd failure notifier is non-recursive and uses the durable protected state path', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const notifier = readFileSync(path.join(root, 'deploy/systemd/wst-academy-ops-alert@.service'), 'utf8');
+  const dropIn = readFileSync(path.join(root, 'deploy/systemd/ops-alert.conf'), 'utf8');
+  assert.match(notifier, /ExecStart=\/usr\/bin\/node .*notify-systemd-failure\.mjs %i/);
+  assert.match(notifier, /UMask=0077/);
+  assert.match(notifier, /ReadWritePaths=\/opt\/wst-academy-qabul-bot\/data/);
+  assert.doesNotMatch(notifier, /OnFailure=/);
+  assert.equal(dropIn.trim(), '[Unit]\nOnFailure=wst-academy-ops-alert@%n.service');
 });

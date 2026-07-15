@@ -23,6 +23,7 @@ export interface AppConfig {
   channelChatId: string;
   salesDiscussionChatId?: number;
   channelPostsFile: string;
+  opsAlertsFile: string;
   channelSchedulerEnabled: boolean;
   channelSchedulerPollMs: number;
   channelPublishStaleMs: number;
@@ -126,6 +127,7 @@ export function loadConfig(): AppConfig {
     channelChatId: process.env.CHANNEL_CHAT_ID || '-1004297032922',
     salesDiscussionChatId: parseOptionalChatId(process.env.SALES_DISCUSSION_CHAT_ID),
     channelPostsFile: process.env.CHANNEL_POSTS_FILE || './data/channel_posts.json',
+    opsAlertsFile: process.env.OPS_ALERTS_FILE || './data/ops_alerts.json',
     channelSchedulerEnabled: process.env.CHANNEL_SCHEDULER_ENABLED !== 'false',
     channelSchedulerPollMs: parseBoundedInteger('CHANNEL_SCHEDULER_POLL_MS', process.env.CHANNEL_SCHEDULER_POLL_MS, 30_000, 5_000, 300_000),
     channelPublishStaleMs: parseBoundedInteger('CHANNEL_PUBLISH_STALE_MS', process.env.CHANNEL_PUBLISH_STALE_MS, 600_000, 60_000, 86_400_000),

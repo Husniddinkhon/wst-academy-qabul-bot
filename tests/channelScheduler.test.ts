@@ -5,7 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { JsonChannelPostStore } from '../src/channelPosts.js';
 import type { ChannelSender } from '../src/channelPublisher.js';
-import { formatTashkentSchedule, parseTashkentSchedule, runChannelSchedulerOnce } from '../src/channelScheduler.js';
+import { formatTashkentSchedule, parseTashkentSchedule, runChannelSchedulerOnce, startChannelScheduler } from '../src/channelScheduler.js';
+import { JsonOperationalAlertStore } from '../src/operationalAlerts.js';
 import { UNV_CAMPAIGN_ID } from '../src/productSales.js';
 
 async function fixture(): Promise<{ store: JsonChannelPostStore; cleanup: () => Promise<void> }> {
@@ -105,4 +106,34 @@ test('cancelled and unreviewed draft posts are never auto-published', async () =
     assert.equal(stats.Cancelled, 1);
     assert.equal(stats.Draft, 1);
   } finally { await cleanup(); }
+});
+
+test('actionable Failed reconciliation still alerts when the scheduler run itself throws', async () => {
+  const { store, cleanup } = await fixture();
+  const alertDirectory = await mkdtemp(path.join(tmpdir(), 'scheduler-alert-'));
+  try {
+    const post = await store.create('Reviewed post that failed', undefined, 10);
+    await store.schedule(post.id, new Date(Date.now() - 60_000).toISOString(), 20);
+    const claim = await store.claimNextDue(new Date());
+    if (claim.ok) await store.markFailed(post.id, claim.attemptId, 'raw error excluded');
+    const calls: string[] = [];
+    const alertSender: ChannelSender = {
+      async sendMessage(_chatId, text) { calls.push(text); return { message_id: 99 }; },
+      async sendPhoto() { return { message_id: 100 }; },
+    };
+    const broken = Object.create(store) as JsonChannelPostStore;
+    broken.recoverStalePublishing = async () => { throw new Error('scheduler storage error'); };
+    const timer = startChannelScheduler(broken, alertSender, '-1001', 60_000, 60_000, undefined, {
+      store: new JsonOperationalAlertStore(path.join(alertDirectory, 'alerts.json')),
+      adminIds: [1],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    clearInterval(timer);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], new RegExp(post.id));
+    assert.doesNotMatch(calls[0], /scheduler storage error|raw error excluded/);
+  } finally {
+    await cleanup();
+    await rm(alertDirectory, { recursive: true, force: true });
+  }
 });

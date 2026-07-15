@@ -1,10 +1,12 @@
 import type { JsonChannelPostStore } from './channelPosts.js';
 import { publishClaimedChannelPost, type ChannelMediaPolicy, type ChannelSender, type PublishResult } from './channelPublisher.js';
+import { alertActionableChannelFailures, type JsonOperationalAlertStore } from './operationalAlerts.js';
 
 export const CHANNEL_TIME_ZONE = 'Asia/Tashkent';
 export const SCHEDULER_PUBLISHER_ID = 0;
 
 export interface SchedulerRunResult { recovered: number; claimed: number; published: number; failed: number }
+export interface SchedulerAlertOptions { store: JsonOperationalAlertStore; adminIds: number[] }
 
 export async function runChannelSchedulerOnce(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, now = new Date(), staleClaimMs = 10 * 60_000, mediaPolicy?: ChannelMediaPolicy): Promise<SchedulerRunResult> {
   const recovered = await store.recoverStalePublishing(new Date(now.getTime() - staleClaimMs));
@@ -19,7 +21,7 @@ export async function runChannelSchedulerOnce(store: JsonChannelPostStore, sende
   return result;
 }
 
-export function startChannelScheduler(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, pollMs: number, staleClaimMs: number, mediaPolicy?: ChannelMediaPolicy): NodeJS.Timeout {
+export function startChannelScheduler(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, pollMs: number, staleClaimMs: number, mediaPolicy?: ChannelMediaPolicy, alerts?: SchedulerAlertOptions): NodeJS.Timeout {
   let running = false;
   const run = async () => {
     if (running) return;
@@ -29,7 +31,15 @@ export function startChannelScheduler(store: JsonChannelPostStore, sender: Chann
       if (result.recovered || result.claimed || result.failed) console.info(JSON.stringify({ event: 'channel_scheduler_run', ...result }));
     } catch (error) {
       console.error('Channel scheduler failed:', error instanceof Error ? error.message : String(error));
-    } finally { running = false; }
+    } finally {
+      if (alerts) {
+        try {
+          const alertResult = await alertActionableChannelFailures(store, sender, alerts.adminIds, alerts.store);
+          if (alertResult.attempted > 0) console.info(JSON.stringify({ event: 'channel_failure_alert', attempted: alertResult.attempted, sent: alertResult.sent, failed: alertResult.failed }));
+        } catch { console.error('Channel failure alert reconciliation failed.'); }
+      }
+      running = false;
+    }
   };
   void run();
   return setInterval(run, pollMs);

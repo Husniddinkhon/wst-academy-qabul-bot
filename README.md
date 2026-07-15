@@ -158,3 +158,32 @@ timestamp must remain unchanged; a reload never uses Telegram's
 `dropPendingUpdates` option. If the env audit reports a forbidden key name,
 do not print its value: stop the release, correct the PM2 declaration, and
 reload once from the clean command above.
+
+### Durable operational failure alerts
+
+Channel posts that enter `Failed` are reconciled by the qabul scheduler. Only
+failures from the last 24 hours are actionable. Each admin recipient is tracked
+independently by a SHA-256 fingerprint: Telegram success is persisted before a
+recipient is considered delivered, failed delivery uses bounded exponential
+backoff, and the same post failure attempt is never sent twice.
+
+Academy health, Academy backup, and WST Sales campaign systemd services use the
+tracked `wst-academy-ops-alert@.service` through `OnFailure` drop-ins. The state
+file defaults to `./data/ops_alerts.json`, is mode `0600`, and applies a
+persisted one-hour cooldown per failed unit. The notifier itself has no
+`OnFailure`, preventing recursive alert loops. Install or refresh the units:
+
+```bash
+install -m 0644 deploy/systemd/wst-academy-ops-alert@.service /etc/systemd/system/
+for unit in wst-academy-health wst-academy-backup wst-sales-campaign; do
+  install -d -m 0755 "/etc/systemd/system/${unit}.service.d"
+  install -m 0644 deploy/systemd/ops-alert.conf \
+    "/etc/systemd/system/${unit}.service.d/ops-alert.conf"
+done
+systemd-analyze verify /etc/systemd/system/wst-academy-ops-alert@.service
+systemctl daemon-reload
+npm run ops:alert-dry-run
+```
+
+The dry-run validates unit-name and invocation discovery only. It never sends a
+Telegram message, changes a campaign, publishes a post, or mutates alert state.

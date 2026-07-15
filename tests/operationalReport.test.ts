@@ -39,6 +39,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
       academyMetrics: async () => academy,
     },
     botHealth: async () => ({ botReachable: true, channelReachable: true, subscriberCount: 123 }),
+    alerts: { stats: async () => ({ records: 1, recipientsDelivered: 2, recipientsPending: 0, recipientsReady: 0 }) },
     ...overrides,
   };
 }
@@ -53,6 +54,7 @@ test('formats a privacy-safe aggregate operational report with explicit Ads boun
   assert.match(text, /Admissions 4 .* Verified paid 2/);
   assert.match(text, /ads\.telegram\.org kabinetida qo‘lda tekshiriladi/);
   assert.match(text, /CAC\/ROAS: ad spend integratsiyasisiz hisoblanmaydi/);
+  assert.match(text, /Operational alert recipients: delivered 2 \| pending 0 \| ready 0/);
   assert.doesNotMatch(text, /Hidden Person|998900000000|777|lead-secret|Private caption/);
 });
 

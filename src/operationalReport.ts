@@ -1,6 +1,7 @@
 import type { ChannelPost, ChannelPostStatus, JsonChannelPostStore } from './channelPosts.js';
 import { REPORT_TIME_ZONE } from './dailyReport.js';
 import { buildSalesReport, type SalesReportDependencies, type SalesReportRange, type SalesReportSnapshot } from './salesReporting.js';
+import type { JsonOperationalAlertStore, OperationalAlertStats } from './operationalAlerts.js';
 
 export interface OperationalBotHealth {
   botReachable: boolean;
@@ -22,6 +23,7 @@ export interface OperationalReportSnapshot {
   bot: OperationalBotHealth;
   content: OperationalContentSnapshot;
   sales?: SalesReportSnapshot;
+  alertDelivery?: OperationalAlertStats;
   unavailableSections: string[];
 }
 
@@ -29,6 +31,7 @@ export interface OperationalReportDependencies {
   channelPosts: Pick<JsonChannelPostStore, 'all'>;
   sales: SalesReportDependencies;
   botHealth: () => Promise<OperationalBotHealth>;
+  alerts?: Pick<JsonOperationalAlertStore, 'stats'>;
 }
 
 const EMPTY_CONTENT_COUNTS: OperationalContentSnapshot['counts'] = {
@@ -46,10 +49,11 @@ export async function buildOperationalReport(
   dependencies: OperationalReportDependencies,
   now = new Date(),
 ): Promise<OperationalReportSnapshot> {
-  const [contentResult, salesResult, botResult] = await Promise.allSettled([
+  const [contentResult, salesResult, botResult, alertResult] = await Promise.allSettled([
     dependencies.channelPosts.all(),
     buildSalesReport(range, dependencies.sales, now),
     dependencies.botHealth(),
+    dependencies.alerts ? dependencies.alerts.stats(now) : Promise.resolve(undefined),
   ]);
 
   const unavailableSections: string[] = [];
@@ -65,12 +69,15 @@ export async function buildOperationalReport(
     ? botResult.value
     : { botReachable: false, channelReachable: false };
   if (botResult.status === 'rejected') unavailableSections.push('Telegram health probe');
+  const alertDelivery = alertResult.status === 'fulfilled' ? alertResult.value : undefined;
+  if (alertResult.status === 'rejected') unavailableSections.push('operational alert state');
 
   const degraded = unavailableSections.length > 0 || !bot.botReachable || !bot.channelReachable;
   const needsAttention = content.counts.Failed > 0
     || content.counts.Publishing > 0
     || content.counts.due > 0
     || (sales?.webhookFailuresQueued ?? 0) > 0
+    || (alertDelivery?.recipientsPending ?? 0) > 0
     || sales?.academy.available === false;
 
   return {
@@ -80,6 +87,7 @@ export async function buildOperationalReport(
     bot,
     content,
     sales,
+    alertDelivery,
     unavailableSections,
   };
 }
@@ -114,6 +122,7 @@ export function formatOperationalReport(snapshot: OperationalReportSnapshot): st
       : sales ? 'Event metrics: mavjud emas' : undefined,
     sales ? `Webhook failures in range: ${sales.webhookFailuresInRange}` : undefined,
     sales ? `Webhook retry/outbox queue now: ${sales.webhookFailuresQueued}` : undefined,
+    snapshot.alertDelivery ? `Operational alert recipients: delivered ${snapshot.alertDelivery.recipientsDelivered} | pending ${snapshot.alertDelivery.recipientsPending} | ready ${snapshot.alertDelivery.recipientsReady}` : undefined,
     '',
     'Academy aggregate',
     sales?.academy.available

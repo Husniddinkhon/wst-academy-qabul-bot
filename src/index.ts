@@ -19,6 +19,7 @@ import { isPermittedSalesConversation, persistSalesConversation } from './salesC
 import { startChannelScheduler } from './channelScheduler.js';
 import { createAcademyMetricsLoader } from './salesReporting.js';
 import { getBotLaunchOptions } from './botLaunch.js';
+import { JsonOperationalAlertStore } from './operationalAlerts.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -223,6 +224,7 @@ async function bootstrap(): Promise<void> {
   const failureStore = new JsonWebhookFailureStore(config.webhookFailedFile);
   const followUpStore = postgres ? new PostgresFollowUpStore(postgres) : new JsonFollowUpStore(config.followupsFile);
   const channelPosts = new JsonChannelPostStore(config.channelPostsFile);
+  const operationalAlerts = new JsonOperationalAlertStore(config.opsAlertsFile);
   const bot = new Telegraf<BotContext>(config.botToken);
   const stage = new Scenes.Stage<BotContext>([createRegistrationScene(store, config.adminIds, config.leadWebhookUrl, failureStore, followUpStore)]);
 
@@ -270,7 +272,7 @@ async function bootstrap(): Promise<void> {
         timeoutMs: config.academyReportTimeoutMs,
       })
     : undefined;
-  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken, channelMediaPolicy, academyMetrics);
+  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken, channelMediaPolicy, academyMetrics, operationalAlerts);
 
   bot.on('photo', async (ctx) => {
     if (!isAdmin(ctx, config.adminIds)) return;
@@ -395,7 +397,7 @@ async function bootstrap(): Promise<void> {
   const followUpTimer = startFollowUpAutomation(bot, store, followUpStore);
   const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);
   const channelSchedulerTimer = config.channelSchedulerEnabled
-    ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelPublishStaleMs, channelMediaPolicy)
+    ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelPublishStaleMs, channelMediaPolicy, { store: operationalAlerts, adminIds: config.adminIds })
     : undefined;
 
   await bot.launch(getBotLaunchOptions(config));
