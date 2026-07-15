@@ -6,6 +6,7 @@ import { deliverLeadWebhook, retryFailedWebhooks } from './webhook.js';
 import type { JsonChannelPostStore } from './channelPosts.js';
 import { publishChannelPost, type ChannelMediaPolicy } from './channelPublisher.js';
 import { buildSalesReport, formatSalesReport, parseSalesReportRange, type SalesReportDependencies } from './salesReporting.js';
+import { buildOperationalReport, formatOperationalReport } from './operationalReport.js';
 import { formatTashkentSchedule, parseTashkentSchedule } from './channelScheduler.js';
 
 const HOT_LEAD_COOLDOWN_MS = 30 * 60 * 1000;
@@ -81,6 +82,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '/call_requests — qo‘ng‘iroq so‘ragan leadlar',
       '/stats — umumiy statistika',
       '/sales_report [YYYY-MM-DD] [YYYY-MM-DD] — далилга асосланган funnel/KPI',
+      '/ops_report [YYYY-MM-DD] [YYYY-MM-DD] — махфий маълумотсиз operational status',
       '/set_student <telegram_id> <status> — o‘quvchi holati',
       '/export_csv — barcha leadlarni CSV qilish',
       '/lead <telegram_id> — bitta leadni ko‘rish',
@@ -257,6 +259,36 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     } catch (error) {
       console.error('Sales KPI report failed:', error instanceof Error ? error.message : String(error));
       return ctx.reply(error instanceof Error && /Format:|Sana|Noto‘g‘ri/.test(error.message) ? error.message : 'Sales KPI hisoboti vaqtincha mavjud emas.');
+    }
+  });
+  bot.command('ops_report', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const args = commandText(ctx).trim().split(/\s+/).slice(1);
+    try {
+      const range = parseSalesReportRange(args);
+      const snapshot = await buildOperationalReport(range, {
+        channelPosts,
+        sales: { store, failureStore, academyMetrics },
+        botHealth: async () => {
+          const [botResult, channelResult] = await Promise.allSettled([
+            fetch(`https://api.telegram.org/bot${botToken}/getMe`, { signal: AbortSignal.timeout(5_000) }).then((response) => response.json()) as Promise<{ ok: boolean }>,
+            fetch(`https://api.telegram.org/bot${botToken}/getChatMemberCount?chat_id=${encodeURIComponent(channelChatId)}`, { signal: AbortSignal.timeout(5_000) }).then((response) => response.json()) as Promise<{ ok: boolean; result?: number }>,
+          ]);
+          const botResponse = botResult.status === 'fulfilled' ? botResult.value : undefined;
+          const channelResponse = channelResult.status === 'fulfilled' ? channelResult.value : undefined;
+          return {
+            botReachable: botResponse?.ok === true,
+            channelReachable: channelResponse?.ok === true,
+            subscriberCount: channelResponse?.ok ? channelResponse.result : undefined,
+          };
+        },
+      });
+      return ctx.reply(formatOperationalReport(snapshot));
+    } catch (error) {
+      console.error('Operational report failed:', error instanceof Error ? error.message : String(error));
+      return ctx.reply(error instanceof Error && /Format:|Sana|Noto‘g‘ri/.test(error.message)
+        ? error.message.replace('/sales_report', '/ops_report')
+        : 'Operational hisobot vaqtincha mavjud emas.');
     }
   });
   bot.command('set_student', async (ctx) => {

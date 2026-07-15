@@ -379,6 +379,7 @@ async function bootstrap(): Promise<void> {
     { command: 'call_requests', description: 'Call requestlar (admin)' },
     { command: 'stats', description: 'Lead statistikasi (admin)' },
     { command: 'sales_report', description: 'Sales funnel va active studentlar (admin)' },
+    { command: 'ops_report', description: 'Yagona operational status (admin)' },
     { command: 'set_student', description: 'O‘quvchi holatini yangilash (admin)' },
     { command: 'export_csv', description: 'Leadlarni CSV qilish (admin)' },
     { command: 'retry_webhooks', description: 'Webhook retry (admin)' },
