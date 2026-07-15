@@ -23,6 +23,28 @@ test('signed webhook rejects short secrets without exposing their value', () => 
   assert.throws(() => loadConfig(), (error: unknown) => error instanceof Error && /at least 32/.test(error.message) && !error.message.includes('too-short'));
 });
 
+test('Academy aggregate reporting reuses signed service identity and validates HTTPS', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.LEAD_WEBHOOK_URL = 'https://academy.example/api/v1/admissions/bot-leads';
+  process.env.LEAD_WEBHOOK_SERVICE_ID = 'academy-bot';
+  process.env.LEAD_WEBHOOK_SECRET = 'academy-report-secret-at-least-32-characters';
+  process.env.ACADEMY_REPORT_BASE_URL = 'https://academy.example/academy-api/';
+  process.env.ACADEMY_REPORT_TIMEOUT_MS = '4000';
+  const config = loadConfig();
+  assert.equal(config.academyReportBaseUrl, 'https://academy.example/academy-api');
+  assert.equal(config.academyReportTimeoutMs, 4_000);
+  process.env.ACADEMY_REPORT_BASE_URL = 'http://academy.example';
+  assert.throws(() => loadConfig(), /must use HTTPS/);
+});
+
+test('Academy reporting cannot be enabled without signed service identity', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.ACADEMY_REPORT_BASE_URL = 'https://academy.example/academy-api';
+  delete process.env.LEAD_WEBHOOK_SERVICE_ID;
+  delete process.env.LEAD_WEBHOOK_SECRET;
+  assert.throws(() => loadConfig(), /requires the existing signed webhook service ID and secret/);
+});
+
 test('unsigned webhook remains valid when signing variables are absent', () => {
   process.env.BOT_TOKEN = 'test-token';
   process.env.LEAD_WEBHOOK_URL = 'https://n8n.example/leads';

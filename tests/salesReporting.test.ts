@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assertReadOnlyReporter, buildSalesReport, formatSalesReport, parseSalesReportRange, type AcademyReportMetrics } from '../src/salesReporting.js';
+import { buildSalesReport, formatSalesReport, parseSalesReportRange, type AcademyReportMetrics } from '../src/salesReporting.js';
 import type { FunnelEventMetrics, JsonLeadStore, JsonWebhookFailureStore } from '../src/storage.js';
 import type { Lead } from '../src/types.js';
 
@@ -11,17 +11,25 @@ function lead(id: number, createdAt: string, source: Lead['source'], campaignId?
 const academy: AcademyReportMetrics = {
   available: true,
   admissions: 4,
-  linkedAdmissions: 2,
-  contacted: 3,
-  contactedWithin24Hours: 2,
-  overdueUncontacted: 1,
-  overdueFollowUps: 1,
-  medianFirstContactMinutes: 90,
+  admissionsByStatus: { new: 1, contacted: 3 },
+  sourceAttributionPresent: 4,
+  campaignAttributionPresent: 2,
+  sourceCoveragePercent: 100,
+  campaignCoveragePercent: 50,
+  slaEligible: 3,
+  slaMissing: 1,
+  slaInvalid: 0,
+  averageFirstContactMinutes: 90,
+  contactedWithin15Minutes: 1,
+  contactedWithin60Minutes: 2,
+  within15MinutesPercent: 33.33,
+  within60MinutesPercent: 66.67,
+  enrollmentsCreated: 3,
+  invoicedEnrollments: 2,
   verifiedPaidConversions: 2,
-  attributedVerifiedPaidConversions: 1,
+  verifiedPaidConversionPercent: 100,
   activeFullyPaidStudents: 3,
-  attributedActiveStudents: 1,
-  verifiedReceipts: [{ currency: 'UZS', amountMinor: 250_000_000 }],
+  verifiedReceipts: [{ currency: 'UZS', count: 2, amountMinor: 250_000_000 }],
 };
 
 test('date range uses inclusive Asia/Tashkent calendar days', () => {
@@ -29,7 +37,8 @@ test('date range uses inclusive Asia/Tashkent calendar days', () => {
   assert.equal(range.from.toISOString(), '2026-07-09T19:00:00.000Z');
   assert.equal(range.toExclusive.toISOString(), '2026-07-15T19:00:00.000Z');
   assert.throws(() => parseSalesReportRange(['2026-02-30']), /Noto‘g‘ri sana/);
-  assert.throws(() => parseSalesReportRange(['2026-07-15', '2026-07-14']), /1–366/);
+  assert.throws(() => parseSalesReportRange(['2026-07-15', '2026-07-14']), /1–31/);
+  assert.throws(() => parseSalesReportRange(['2026-06-01', '2026-07-15']), /1–31/);
 });
 
 test('report aggregates sources, campaign, events and webhook failures without PII', async () => {
@@ -53,8 +62,11 @@ test('report aggregates sources, campaign, events and webhook failures without P
   assert.equal(snapshot.webhookFailuresInRange, 1);
   assert.match(text, /Event tracking coverage: 2\/3/);
   assert.match(text, /Hot escalation \(event-tracked\): 2/);
-  assert.match(text, /Verified-paid conversion: 2 \(attributed: 1\)/);
-  assert.match(text, /UZS 2,500,000/);
+  assert.match(text, /Admissions status \(current\): new: 1, contacted: 3/);
+  assert.match(text, /Campaign attribution: 2\/4 \(50.0%\)/);
+  assert.match(text, /Verified-paid conversion: 2\/2 \(100.0%\)/);
+  assert.match(text, /UZS 2,500,000 \(2 ta\)/);
+  assert.match(text, /First contact ≤15 min: 1\/3 \(33.3%\)/);
   assert.match(text, /CAC\/ROAS: hisoblanmaydi/);
   assert.doesNotMatch(text, /Hidden|telegramId|phone/i);
 });
@@ -68,11 +80,4 @@ test('missing Academy integration is explicit and never invents paid or SLA metr
   assert.match(text, /Verified-paid conversion: mavjud emas/);
   assert.match(text, /Operator SLA: mavjud emas/);
   assert.doesNotMatch(text, /Verified-paid conversion: 0/);
-});
-
-test('Academy adapter rejects a database role with write privilege', async () => {
-  const unsafeClient = { query: async () => ({ rows: [{ read_only: 'on', has_write: true }] }) };
-  await assert.rejects(assertReadOnlyReporter(unsafeClient as never), /least-privilege read-only/);
-  const safeClient = { query: async () => ({ rows: [{ read_only: 'on', has_write: false }] }) };
-  await assert.doesNotReject(assertReadOnlyReporter(safeClient as never));
 });

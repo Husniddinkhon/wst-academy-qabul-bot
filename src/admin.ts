@@ -5,7 +5,7 @@ import { formatLead, formatLeadList } from './messages.js';
 import { deliverLeadWebhook, retryFailedWebhooks } from './webhook.js';
 import type { JsonChannelPostStore } from './channelPosts.js';
 import { publishChannelPost, type ChannelMediaPolicy } from './channelPublisher.js';
-import { buildSalesReport, createAcademyMetricsLoader, formatSalesReport, parseSalesReportRange } from './salesReporting.js';
+import { buildSalesReport, formatSalesReport, parseSalesReportRange, type SalesReportDependencies } from './salesReporting.js';
 import { formatTashkentSchedule, parseTashkentSchedule } from './channelScheduler.js';
 
 const HOT_LEAD_COOLDOWN_MS = 30 * 60 * 1000;
@@ -56,7 +56,7 @@ async function safeStoreStats(store: JsonLeadStore): Promise<string[]> {
   }
 }
 
-export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[], failureStore: JsonWebhookFailureStore, leadWebhookUrl: string | undefined, channelPosts: JsonChannelPostStore, channelChatId: string, botToken: string, channelMediaPolicy?: ChannelMediaPolicy): void {
+export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[], failureStore: JsonWebhookFailureStore, leadWebhookUrl: string | undefined, channelPosts: JsonChannelPostStore, channelChatId: string, botToken: string, channelMediaPolicy?: ChannelMediaPolicy, academyMetrics?: SalesReportDependencies['academyMetrics']): void {
   const guard = async (ctx: BotContext): Promise<boolean> => { if (isAdmin(ctx, adminIds)) return true; await ctx.reply('⛔ Bu buyruq faqat adminlar uchun.'); return false; };
   const commandText = (ctx: BotContext): string => ctx.message && 'text' in ctx.message && ctx.message.text ? ctx.message.text : '';
   bot.command('id', async (ctx) => ctx.reply(`Sizning Telegram ID: ${ctx.from?.id ?? 'aniqlanmadi'}`));
@@ -251,7 +251,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       const snapshot = await buildSalesReport(range, {
         store,
         failureStore,
-        academyMetrics: createAcademyMetricsLoader(process.env.REPORT_DATABASE_URL),
+        academyMetrics,
       });
       return ctx.reply(formatSalesReport(snapshot));
     } catch (error) {

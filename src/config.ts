@@ -10,6 +10,8 @@ export interface AppConfig {
   leadWebhookUrl?: string;
   leadWebhookServiceId?: string;
   leadWebhookSecret?: string;
+  academyReportBaseUrl?: string;
+  academyReportTimeoutMs: number;
   webhookFailedFile: string;
   followupsFile: string;
   dailyReportEnabled: boolean;
@@ -77,6 +79,7 @@ export function loadConfig(): AppConfig {
   const botToken = process.env.BOT_TOKEN;
   const leadWebhookServiceId = process.env.LEAD_WEBHOOK_SERVICE_ID?.trim() || undefined;
   const leadWebhookSecret = process.env.LEAD_WEBHOOK_SECRET || undefined;
+  const academyReportBaseUrl = process.env.ACADEMY_REPORT_BASE_URL?.trim().replace(/\/+$/, '') || undefined;
   const fallbackValues = [process.env.AI_FALLBACK_API_KEY, process.env.AI_FALLBACK_BASE_URL, process.env.AI_FALLBACK_MODEL];
   const requestTimeoutMs = parseBoundedInteger('AI_REQUEST_TIMEOUT_MS', process.env.AI_REQUEST_TIMEOUT_MS, 15_000, 1_000, 60_000);
   const maxOutputTokens = parseBoundedInteger('AI_MAX_OUTPUT_TOKENS', process.env.AI_MAX_OUTPUT_TOKENS, 300, 32, 2_048);
@@ -93,6 +96,12 @@ export function loadConfig(): AppConfig {
   if (leadWebhookServiceId && !process.env.LEAD_WEBHOOK_URL?.trim()) {
     throw new Error('LEAD_WEBHOOK_URL is required when signed Academy webhook delivery is enabled.');
   }
+  if (academyReportBaseUrl && (!leadWebhookServiceId || !leadWebhookSecret)) {
+    throw new Error('ACADEMY_REPORT_BASE_URL requires the existing signed webhook service ID and secret.');
+  }
+  if (academyReportBaseUrl && !/^https:\/\//i.test(academyReportBaseUrl)) {
+    throw new Error('ACADEMY_REPORT_BASE_URL must use HTTPS.');
+  }
   if (fallbackValues.some(Boolean) && !fallbackValues.every(Boolean)) {
     throw new Error('AI_FALLBACK_API_KEY, AI_FALLBACK_BASE_URL and AI_FALLBACK_MODEL must be configured together.');
   }
@@ -104,6 +113,8 @@ export function loadConfig(): AppConfig {
     leadWebhookUrl: process.env.LEAD_WEBHOOK_URL?.trim() || undefined,
     leadWebhookServiceId,
     leadWebhookSecret,
+    academyReportBaseUrl,
+    academyReportTimeoutMs: parseBoundedInteger('ACADEMY_REPORT_TIMEOUT_MS', process.env.ACADEMY_REPORT_TIMEOUT_MS, 5_000, 500, 15_000),
     webhookFailedFile: process.env.WEBHOOK_FAILED_FILE ?? './data/webhook_failed.json',
     followupsFile: process.env.FOLLOWUPS_FILE ?? './data/followups.json',
     dailyReportEnabled: process.env.DAILY_REPORT_ENABLED !== 'false',

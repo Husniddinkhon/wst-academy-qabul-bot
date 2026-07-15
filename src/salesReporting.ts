@@ -1,4 +1,4 @@
-import { Pool, type PoolClient } from 'pg';
+import { createAcademyReportClient, type AcademyReportClientOptions } from './academyReportClient.js';
 import { getTashkentDateKey, REPORT_TIME_ZONE } from './dailyReport.js';
 import type { FunnelEventMetrics, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import type { Lead } from './types.js';
@@ -13,17 +13,25 @@ export interface SalesReportRange {
 export interface AcademyReportMetrics {
   available: boolean;
   admissions: number;
-  linkedAdmissions: number;
-  contacted: number;
-  contactedWithin24Hours: number;
-  overdueUncontacted: number;
-  overdueFollowUps: number;
-  medianFirstContactMinutes?: number;
+  admissionsByStatus: Record<string, number>;
+  sourceAttributionPresent: number;
+  campaignAttributionPresent: number;
+  sourceCoveragePercent?: number;
+  campaignCoveragePercent?: number;
+  slaEligible: number;
+  slaMissing: number;
+  slaInvalid: number;
+  averageFirstContactMinutes?: number;
+  contactedWithin15Minutes: number;
+  contactedWithin60Minutes: number;
+  within15MinutesPercent?: number;
+  within60MinutesPercent?: number;
+  enrollmentsCreated: number;
+  invoicedEnrollments: number;
   verifiedPaidConversions: number;
-  attributedVerifiedPaidConversions: number;
+  verifiedPaidConversionPercent?: number;
   activeFullyPaidStudents: number;
-  attributedActiveStudents: number;
-  verifiedReceipts: Array<{ currency: string; amountMinor: number }>;
+  verifiedReceipts: Array<{ currency: string; count: number; amountMinor: number }>;
 }
 
 export interface SalesReportDependencies {
@@ -45,15 +53,18 @@ export interface SalesReportSnapshot {
 const UNAVAILABLE_ACADEMY: AcademyReportMetrics = {
   available: false,
   admissions: 0,
-  linkedAdmissions: 0,
-  contacted: 0,
-  contactedWithin24Hours: 0,
-  overdueUncontacted: 0,
-  overdueFollowUps: 0,
+  admissionsByStatus: {},
+  sourceAttributionPresent: 0,
+  campaignAttributionPresent: 0,
+  slaEligible: 0,
+  slaMissing: 0,
+  slaInvalid: 0,
+  contactedWithin15Minutes: 0,
+  contactedWithin60Minutes: 0,
+  enrollmentsCreated: 0,
+  invoicedEnrollments: 0,
   verifiedPaidConversions: 0,
-  attributedVerifiedPaidConversions: 0,
   activeFullyPaidStudents: 0,
-  attributedActiveStudents: 0,
   verifiedReceipts: [],
 };
 
@@ -67,7 +78,7 @@ export function parseSalesReportRange(args: string[], now = new Date()): SalesRe
   const from = dateKeyToUtc(fromKey);
   const toExclusive = dateKeyToUtc(addCalendarDays(toKey, 1));
   const days = Math.round((toExclusive.getTime() - from.getTime()) / 86_400_000);
-  if (days < 1 || days > 366) throw new Error('Sana oralig‘i 1–366 kun bo‘lishi kerak.');
+  if (days < 1 || days > 31) throw new Error('Sana oralig‘i 1–31 kun bo‘lishi kerak.');
   return { fromKey, toKey, from, toExclusive };
 }
 
@@ -122,131 +133,57 @@ export function formatSalesReport(snapshot: SalesReportSnapshot): string {
   ].join('\n');
 }
 
-export function createAcademyMetricsLoader(connectionString: string | undefined): SalesReportDependencies['academyMetrics'] | undefined {
-  if (!connectionString) return undefined;
-  return (range, now) => loadAcademyMetrics(connectionString, range, now);
-}
-
-async function loadAcademyMetrics(connectionString: string, range: SalesReportRange, now: Date): Promise<AcademyReportMetrics> {
-  const pool = new Pool({ connectionString, max: 1, connectionTimeoutMillis: 3_000, statement_timeout: 5_000 });
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN TRANSACTION READ ONLY');
-    await assertReadOnlyReporter(client);
-    const referenceTime = new Date(Math.min(now.getTime(), range.toExclusive.getTime()));
-    const admissions = await client.query(`
-      SELECT count(*)::int AS admissions,
-        count(*) FILTER (WHERE ta.user_id IS NOT NULL)::int AS linked_admissions,
-        count(*) FILTER (WHERE a.last_contacted_at IS NOT NULL)::int AS contacted,
-        count(*) FILTER (WHERE a.last_contacted_at <= a.created_at + interval '24 hours')::int AS contacted_within_24h,
-        count(*) FILTER (WHERE a.last_contacted_at IS NULL AND a.created_at < $3 - interval '24 hours')::int AS overdue_uncontacted,
-        count(*) FILTER (WHERE a.next_follow_up_at IS NOT NULL AND a.next_follow_up_at < $3 AND a.status NOT IN ('ENROLLED','LOST'))::int AS overdue_followups,
-        percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM (a.last_contacted_at - a.created_at)) / 60.0)
-          FILTER (WHERE a.last_contacted_at IS NOT NULL) AS median_first_contact_minutes
-      FROM admissions_leads a
-      LEFT JOIN telegram_accounts ta ON ta.telegram_user_id = a.telegram_id
-      WHERE a.created_at >= $1 AND a.created_at < $2
-    `, [range.from, range.toExclusive, referenceTime]);
-    const payments = await client.query(`
-      WITH ordered AS (
-        SELECT p.id, p.enrollment_id, p.verified_at, i.amount_minor AS invoice_amount,
-          sum(p.amount_minor) OVER (PARTITION BY p.enrollment_id ORDER BY p.verified_at, p.id) AS paid_to_date
-        FROM payment_verifications p
-        JOIN invoices i ON i.enrollment_id = p.enrollment_id
-        WHERE p.status = 'VERIFIED' AND p.verified_at IS NOT NULL
-      ), full_paid AS (
-        SELECT DISTINCT ON (enrollment_id) enrollment_id, verified_at AS converted_at
-        FROM ordered WHERE paid_to_date >= invoice_amount
-        ORDER BY enrollment_id, verified_at, id
-      ), linked AS (
-        SELECT DISTINCT e.id AS enrollment_id
-        FROM enrollments e
-        JOIN telegram_accounts ta ON ta.user_id = e.user_id
-        JOIN admissions_leads a ON a.telegram_id = ta.telegram_user_id
-      )
-      SELECT count(*) FILTER (WHERE f.converted_at >= $1 AND f.converted_at < $2)::int AS verified_paid,
-        count(*) FILTER (WHERE f.converted_at >= $1 AND f.converted_at < $2 AND l.enrollment_id IS NOT NULL)::int AS attributed_verified_paid
-      FROM full_paid f LEFT JOIN linked l ON l.enrollment_id = f.enrollment_id
-    `, [range.from, range.toExclusive]);
-    const active = await client.query(`
-      WITH paid AS (
-        SELECT p.enrollment_id, sum(p.amount_minor) AS paid_amount
-        FROM payment_verifications p WHERE p.status = 'VERIFIED' GROUP BY p.enrollment_id
-      ), linked AS (
-        SELECT DISTINCT e.id AS enrollment_id
-        FROM enrollments e
-        JOIN telegram_accounts ta ON ta.user_id = e.user_id
-        JOIN admissions_leads a ON a.telegram_id = ta.telegram_user_id
-      )
-      SELECT count(*)::int AS active_paid,
-        count(*) FILTER (WHERE l.enrollment_id IS NOT NULL)::int AS attributed_active
-      FROM enrollments e
-      JOIN invoices i ON i.enrollment_id = e.id
-      JOIN paid p ON p.enrollment_id = e.id AND p.paid_amount >= i.amount_minor
-      LEFT JOIN linked l ON l.enrollment_id = e.id
-      WHERE e.status = 'ACTIVE'
-    `);
-    const receipts = await client.query(`
-      SELECT currency, sum(amount_minor)::bigint AS amount_minor
-      FROM payment_verifications
-      WHERE status = 'VERIFIED' AND verified_at >= $1 AND verified_at < $2
-      GROUP BY currency ORDER BY currency
-    `, [range.from, range.toExclusive]);
-    await client.query('COMMIT');
-    const a = admissions.rows[0] ?? {};
-    const p = payments.rows[0] ?? {};
-    const s = active.rows[0] ?? {};
+export function createAcademyMetricsLoader(options: AcademyReportClientOptions | undefined): SalesReportDependencies['academyMetrics'] | undefined {
+  if (!options) return undefined;
+  const client = createAcademyReportClient(options);
+  return async (range) => {
+    const report = await client.load(range.fromKey, range.toKey);
+    const attribution = report.admissions.attribution;
+    const sla = report.admissions.operator_sla;
     return {
       available: true,
-      admissions: Number(a.admissions ?? 0),
-      linkedAdmissions: Number(a.linked_admissions ?? 0),
-      contacted: Number(a.contacted ?? 0),
-      contactedWithin24Hours: Number(a.contacted_within_24h ?? 0),
-      overdueUncontacted: Number(a.overdue_uncontacted ?? 0),
-      overdueFollowUps: Number(a.overdue_followups ?? 0),
-      medianFirstContactMinutes: a.median_first_contact_minutes == null ? undefined : Number(a.median_first_contact_minutes),
-      verifiedPaidConversions: Number(p.verified_paid ?? 0),
-      attributedVerifiedPaidConversions: Number(p.attributed_verified_paid ?? 0),
-      activeFullyPaidStudents: Number(s.active_paid ?? 0),
-      attributedActiveStudents: Number(s.attributed_active ?? 0),
-      verifiedReceipts: receipts.rows.map((row) => ({ currency: String(row.currency), amountMinor: Number(row.amount_minor) })),
+      admissions: report.admissions.leads_created,
+      admissionsByStatus: report.admissions.by_current_status,
+      sourceAttributionPresent: attribution.source_present,
+      campaignAttributionPresent: attribution.campaign_present,
+      sourceCoveragePercent: attribution.source_coverage_percent ?? undefined,
+      campaignCoveragePercent: attribution.campaign_coverage_percent ?? undefined,
+      slaEligible: sla.eligible_leads,
+      slaMissing: sla.missing_first_contact_timestamp,
+      slaInvalid: sla.invalid_timestamp_rows_excluded,
+      averageFirstContactMinutes: sla.average_first_contact_seconds == null ? undefined : sla.average_first_contact_seconds / 60,
+      contactedWithin15Minutes: sla.contacted_within_15_minutes,
+      contactedWithin60Minutes: sla.contacted_within_60_minutes,
+      within15MinutesPercent: sla.within_15_minutes_percent ?? undefined,
+      within60MinutesPercent: sla.within_60_minutes_percent ?? undefined,
+      enrollmentsCreated: report.enrollments.created,
+      invoicedEnrollments: report.enrollments.invoiced,
+      verifiedPaidConversions: report.enrollments.fully_paid_from_created_cohort,
+      verifiedPaidConversionPercent: report.enrollments.verified_paid_conversion_percent ?? undefined,
+      activeFullyPaidStudents: report.enrollments.current_fully_paid_active,
+      verifiedReceipts: report.payments.verified_in_range_by_currency.map((item) => ({ currency: item.currency, count: item.verified_count, amountMinor: item.verified_amount_minor })),
     };
-  } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined);
-    throw error;
-  } finally {
-    client.release();
-    await pool.end();
-  }
-}
-
-export async function assertReadOnlyReporter(client: Pick<PoolClient, 'query'>): Promise<void> {
-  const state = await client.query(`
-    SELECT current_setting('transaction_read_only') AS read_only,
-      has_table_privilege(current_user, 'admissions_leads', 'INSERT,UPDATE,DELETE') OR
-      has_table_privilege(current_user, 'enrollments', 'INSERT,UPDATE,DELETE') OR
-      has_table_privilege(current_user, 'payment_verifications', 'INSERT,UPDATE,DELETE') AS has_write
-  `);
-  if (state.rows[0]?.read_only !== 'on' || state.rows[0]?.has_write) throw new Error('Academy reporting database role is not least-privilege read-only.');
+  };
 }
 
 function formatAcademy(metrics: AcademyReportMetrics): string[] {
-  const contactRate = metrics.admissions ? ((metrics.contactedWithin24Hours / metrics.admissions) * 100).toFixed(1) : '0.0';
-  const coverage = metrics.admissions ? ((metrics.linkedAdmissions / metrics.admissions) * 100).toFixed(1) : '0.0';
+  const statuses = Object.entries(metrics.admissionsByStatus).filter(([, count]) => count > 0).map(([status, count]) => `${status}: ${count}`).join(', ') || 'yo‘q';
   const receipts = metrics.verifiedReceipts.length
-    ? metrics.verifiedReceipts.map((item) => `${item.currency} ${formatMinor(item.amountMinor)}`).join(', ')
+    ? metrics.verifiedReceipts.map((item) => `${item.currency} ${formatMinor(item.amountMinor)} (${item.count} ta)`).join(', ')
     : '0';
   return [
     `Academy admissions: ${metrics.admissions}`,
-    `Telegram attribution coverage: ${metrics.linkedAdmissions}/${metrics.admissions} (${coverage}%)`,
-    `Verified-paid conversion: ${metrics.verifiedPaidConversions} (attributed: ${metrics.attributedVerifiedPaidConversions})`,
-    `Active fully-paid students (current): ${metrics.activeFullyPaidStudents} (attributed: ${metrics.attributedActiveStudents})`,
+    `Admissions status (current): ${statuses}`,
+    `Source attribution: ${metrics.sourceAttributionPresent}/${metrics.admissions} (${formatPercent(metrics.sourceCoveragePercent)})`,
+    `Campaign attribution: ${metrics.campaignAttributionPresent}/${metrics.admissions} (${formatPercent(metrics.campaignCoveragePercent)})`,
+    `Range enrollment cohort: ${metrics.enrollmentsCreated} created, ${metrics.invoicedEnrollments} invoiced`,
+    `Verified-paid conversion: ${metrics.verifiedPaidConversions}/${metrics.invoicedEnrollments} (${formatPercent(metrics.verifiedPaidConversionPercent)})`,
+    `Active fully-paid students (current): ${metrics.activeFullyPaidStudents}`,
     `Verified receipts: ${receipts}`,
-    `Operator contacted: ${metrics.contacted}/${metrics.admissions}`,
-    `First contact ≤24h: ${metrics.contactedWithin24Hours}/${metrics.admissions} (${contactRate}%)`,
-    `Median first contact: ${metrics.medianFirstContactMinutes == null ? 'mavjud emas' : `${Math.round(metrics.medianFirstContactMinutes)} min`}`,
-    `Overdue uncontacted: ${metrics.overdueUncontacted}`,
-    `Overdue follow-ups: ${metrics.overdueFollowUps}`,
+    `First-contact SLA eligible: ${metrics.slaEligible}; missing: ${metrics.slaMissing}; invalid excluded: ${metrics.slaInvalid}`,
+    `First contact ≤15 min: ${metrics.contactedWithin15Minutes}/${metrics.slaEligible} (${formatPercent(metrics.within15MinutesPercent)})`,
+    `First contact ≤60 min: ${metrics.contactedWithin60Minutes}/${metrics.slaEligible} (${formatPercent(metrics.within60MinutesPercent)})`,
+    `Average first contact: ${metrics.averageFirstContactMinutes == null ? 'mavjud emas' : `${Math.round(metrics.averageFirstContactMinutes)} min`}`,
   ];
 }
 
@@ -278,3 +215,4 @@ function addCalendarDays(value: string, days: number): string {
   return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
 }
 function formatMinor(value: number): string { return (value / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); }
+function formatPercent(value: number | undefined): string { return value == null ? 'mavjud emas' : `${value.toFixed(1)}%`; }

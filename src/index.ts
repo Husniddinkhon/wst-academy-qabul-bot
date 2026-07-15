@@ -17,6 +17,8 @@ import { parseStartAttribution, resetSessionForStart } from './startFlow.js';
 import { classifyProductLead, getProductSalesAnswer, isProductSalesQuestion, productLeadReason, UNV_CAMPAIGN_ID } from './productSales.js';
 import { isPermittedSalesConversation, persistSalesConversation } from './salesConversation.js';
 import { startChannelScheduler } from './channelScheduler.js';
+import { createAcademyMetricsLoader } from './salesReporting.js';
+import { getBotLaunchOptions } from './botLaunch.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -260,7 +262,15 @@ async function bootstrap(): Promise<void> {
   });
 
   const channelMediaPolicy = { assetRoot: config.channelAssetRoot, allowedHttpsHosts: config.channelImageHosts };
-  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken, channelMediaPolicy);
+  const academyMetrics = config.academyReportBaseUrl && config.leadWebhookServiceId && config.leadWebhookSecret
+    ? createAcademyMetricsLoader({
+        baseUrl: config.academyReportBaseUrl,
+        serviceId: config.leadWebhookServiceId,
+        serviceSecret: config.leadWebhookSecret,
+        timeoutMs: config.academyReportTimeoutMs,
+      })
+    : undefined;
+  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken, channelMediaPolicy, academyMetrics);
 
   bot.on('photo', async (ctx) => {
     if (!isAdmin(ctx, config.adminIds)) return;
@@ -387,7 +397,7 @@ async function bootstrap(): Promise<void> {
     ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelPublishStaleMs, channelMediaPolicy)
     : undefined;
 
-  await bot.launch({ dropPendingUpdates: config.isProduction });
+  await bot.launch(getBotLaunchOptions(config));
   console.log('WST Academy qabul bot is running.');
 
   const shutdown = async (signal: NodeJS.Signals) => {
