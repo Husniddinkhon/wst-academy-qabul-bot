@@ -15,6 +15,13 @@ function report() {
       attribution: { eligible_leads: 10, source_present: 10, campaign_present: 8, source_coverage_percent: 100, campaign_coverage_percent: 80, definition: 'aggregate' },
       operator_sla: { eligible_leads: 6, missing_first_contact_timestamp: 4, invalid_timestamp_rows_excluded: 0, average_first_contact_seconds: 600, contacted_within_15_minutes: 5, contacted_within_60_minutes: 6, within_15_minutes_percent: 83.33, within_60_minutes_percent: 100, definition: 'real timestamps' },
     },
+    lead_cohort_funnel: {
+      eligible_leads: 10, contacted_leads: 6, payment_reported_current_unverified: 1,
+      linked_enrollment_leads: 4, active_enrollment_leads: 3, verified_paid_leads: 3,
+      verified_paid_active_access_leads: 2, contacted_percent: 60,
+      linked_enrollment_percent: 40, verified_paid_active_access_percent: 20,
+      definition: 'exact Telegram account linkage; unverified is never revenue',
+    },
     payments: { verified_in_range_by_currency: [{ currency: 'UZS', verified_count: 2, verified_amount_minor: 250_000_000 }], definition: 'verified only' },
     enrollments: { created: 4, invoiced: 4, fully_paid_from_created_cohort: 2, verified_paid_conversion_percent: 50, current_fully_paid_active: 3, definition: 'same currency cumulative' },
   };
@@ -29,6 +36,7 @@ test('signs an empty GET body with cryptographic nonce and validates aggregate r
   });
   const result = await client.load('2026-07-01', '2026-07-15');
   assert.equal(result.enrollments.current_fully_paid_active, 3);
+  assert.equal(result.lead_cohort_funnel.verified_paid_active_access_leads, 2);
   assert.equal(seenUrl, 'https://pilot.example/academy-api/api/v1/bot-reports/academy-summary?date_from=2026-07-01&date_to=2026-07-15');
   assert.equal(seenInit?.method, 'GET');
   assert.equal(seenInit?.body, undefined);

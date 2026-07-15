@@ -30,6 +30,16 @@ const academy: AcademyReportMetrics = {
   verifiedPaidConversionPercent: 100,
   activeFullyPaidStudents: 3,
   verifiedReceipts: [{ currency: 'UZS', count: 2, amountMinor: 250_000_000 }],
+  leadCohortEligible: 4,
+  leadCohortContacted: 3,
+  leadCohortPaymentReportedUnverified: 1,
+  leadCohortLinkedEnrollment: 2,
+  leadCohortActiveEnrollment: 2,
+  leadCohortVerifiedPaid: 2,
+  leadCohortVerifiedPaidActiveAccess: 1,
+  leadCohortContactedPercent: 75,
+  leadCohortLinkedEnrollmentPercent: 50,
+  leadCohortVerifiedPaidActiveAccessPercent: 25,
 };
 
 test('date range uses inclusive Asia/Tashkent calendar days', () => {
@@ -65,6 +75,8 @@ test('report aggregates sources, campaign, events and webhook failures without P
   assert.match(text, /Admissions status \(current\): new: 1, contacted: 3/);
   assert.match(text, /Campaign attribution: 2\/4 \(50.0%\)/);
   assert.match(text, /Verified-paid conversion: 2\/2 \(100.0%\)/);
+  assert.match(text, /Payment reported \(current, unverified; revenue emas\): 1/);
+  assert.match(text, /verified-paid active access: 1\/4 \(25.0%\)/);
   assert.match(text, /UZS 2,500,000 \(2 ta\)/);
   assert.match(text, /First contact ≤15 min: 1\/3 \(33.3%\)/);
   assert.match(text, /CAC\/ROAS: hisoblanmaydi/);

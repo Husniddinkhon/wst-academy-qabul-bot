@@ -131,6 +131,12 @@ export function formatOperationalReport(snapshot: OperationalReportSnapshot): st
     sales?.academy.available
       ? `SLA eligible ${sales.academy.slaEligible} | ≤15m ${sales.academy.contactedWithin15Minutes} | ≤60m ${sales.academy.contactedWithin60Minutes} | missing ${sales.academy.slaMissing}`
       : undefined,
+    sales?.academy.available
+      ? `Lead cohort ${sales.academy.leadCohortEligible} | contacted ${sales.academy.leadCohortContacted} | payment reported unverified ${sales.academy.leadCohortPaymentReportedUnverified}`
+      : undefined,
+    sales?.academy.available
+      ? `Exact linked enrollment ${sales.academy.leadCohortLinkedEnrollment} | active enrollment ${sales.academy.leadCohortActiveEnrollment} | verified-paid active access ${sales.academy.leadCohortVerifiedPaidActiveAccess}`
+      : undefined,
     '',
     'Telegram Ads boundary',
     'Moderation/status/spend: botda mavjud emas; ads.telegram.org kabinetida qo‘lda tekshiriladi.',

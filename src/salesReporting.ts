@@ -32,6 +32,16 @@ export interface AcademyReportMetrics {
   verifiedPaidConversionPercent?: number;
   activeFullyPaidStudents: number;
   verifiedReceipts: Array<{ currency: string; count: number; amountMinor: number }>;
+  leadCohortEligible: number;
+  leadCohortContacted: number;
+  leadCohortPaymentReportedUnverified: number;
+  leadCohortLinkedEnrollment: number;
+  leadCohortActiveEnrollment: number;
+  leadCohortVerifiedPaid: number;
+  leadCohortVerifiedPaidActiveAccess: number;
+  leadCohortContactedPercent?: number;
+  leadCohortLinkedEnrollmentPercent?: number;
+  leadCohortVerifiedPaidActiveAccessPercent?: number;
 }
 
 export interface SalesReportDependencies {
@@ -66,6 +76,13 @@ const UNAVAILABLE_ACADEMY: AcademyReportMetrics = {
   verifiedPaidConversions: 0,
   activeFullyPaidStudents: 0,
   verifiedReceipts: [],
+  leadCohortEligible: 0,
+  leadCohortContacted: 0,
+  leadCohortPaymentReportedUnverified: 0,
+  leadCohortLinkedEnrollment: 0,
+  leadCohortActiveEnrollment: 0,
+  leadCohortVerifiedPaid: 0,
+  leadCohortVerifiedPaidActiveAccess: 0,
 };
 
 export function parseSalesReportRange(args: string[], now = new Date()): SalesReportRange {
@@ -140,6 +157,7 @@ export function createAcademyMetricsLoader(options: AcademyReportClientOptions |
     const report = await client.load(range.fromKey, range.toKey);
     const attribution = report.admissions.attribution;
     const sla = report.admissions.operator_sla;
+    const funnel = report.lead_cohort_funnel;
     return {
       available: true,
       admissions: report.admissions.leads_created,
@@ -162,6 +180,16 @@ export function createAcademyMetricsLoader(options: AcademyReportClientOptions |
       verifiedPaidConversionPercent: report.enrollments.verified_paid_conversion_percent ?? undefined,
       activeFullyPaidStudents: report.enrollments.current_fully_paid_active,
       verifiedReceipts: report.payments.verified_in_range_by_currency.map((item) => ({ currency: item.currency, count: item.verified_count, amountMinor: item.verified_amount_minor })),
+      leadCohortEligible: funnel.eligible_leads,
+      leadCohortContacted: funnel.contacted_leads,
+      leadCohortPaymentReportedUnverified: funnel.payment_reported_current_unverified,
+      leadCohortLinkedEnrollment: funnel.linked_enrollment_leads,
+      leadCohortActiveEnrollment: funnel.active_enrollment_leads,
+      leadCohortVerifiedPaid: funnel.verified_paid_leads,
+      leadCohortVerifiedPaidActiveAccess: funnel.verified_paid_active_access_leads,
+      leadCohortContactedPercent: funnel.contacted_percent ?? undefined,
+      leadCohortLinkedEnrollmentPercent: funnel.linked_enrollment_percent ?? undefined,
+      leadCohortVerifiedPaidActiveAccessPercent: funnel.verified_paid_active_access_percent ?? undefined,
     };
   };
 }
@@ -180,6 +208,12 @@ function formatAcademy(metrics: AcademyReportMetrics): string[] {
     `Verified-paid conversion: ${metrics.verifiedPaidConversions}/${metrics.invoicedEnrollments} (${formatPercent(metrics.verifiedPaidConversionPercent)})`,
     `Active fully-paid students (current): ${metrics.activeFullyPaidStudents}`,
     `Verified receipts: ${receipts}`,
+    `Lead cohort: ${metrics.leadCohortEligible} unique Telegram lead`,
+    `Lead → contacted: ${metrics.leadCohortContacted}/${metrics.leadCohortEligible} (${formatPercent(metrics.leadCohortContactedPercent)})`,
+    `Payment reported (current, unverified; revenue emas): ${metrics.leadCohortPaymentReportedUnverified}`,
+    `Lead → linked enrollment: ${metrics.leadCohortLinkedEnrollment}/${metrics.leadCohortEligible} (${formatPercent(metrics.leadCohortLinkedEnrollmentPercent)})`,
+    `Current active enrollment: ${metrics.leadCohortActiveEnrollment}; verified-paid lead: ${metrics.leadCohortVerifiedPaid}`,
+    `Lead → verified-paid active access: ${metrics.leadCohortVerifiedPaidActiveAccess}/${metrics.leadCohortEligible} (${formatPercent(metrics.leadCohortVerifiedPaidActiveAccessPercent)})`,
     `First-contact SLA eligible: ${metrics.slaEligible}; missing: ${metrics.slaMissing}; invalid excluded: ${metrics.slaInvalid}`,
     `First contact ≤15 min: ${metrics.contactedWithin15Minutes}/${metrics.slaEligible} (${formatPercent(metrics.within15MinutesPercent)})`,
     `First contact ≤60 min: ${metrics.contactedWithin60Minutes}/${metrics.slaEligible} (${formatPercent(metrics.within60MinutesPercent)})`,

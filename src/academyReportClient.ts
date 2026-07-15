@@ -33,6 +33,19 @@ export interface AcademyAggregateReport {
       definition: string;
     };
   };
+  lead_cohort_funnel: {
+    eligible_leads: number;
+    contacted_leads: number;
+    payment_reported_current_unverified: number;
+    linked_enrollment_leads: number;
+    active_enrollment_leads: number;
+    verified_paid_leads: number;
+    verified_paid_active_access_leads: number;
+    contacted_percent: number | null;
+    linked_enrollment_percent: number | null;
+    verified_paid_active_access_percent: number | null;
+    definition: string;
+  };
   payments: {
     verified_in_range_by_currency: Array<{
       currency: string;
@@ -147,6 +160,15 @@ function assertAggregateReport(value: unknown, dateFrom: string, dateTo: string)
   assertNullableNumber(value.admissions.operator_sla.within_15_minutes_percent, 'within_15_minutes_percent');
   assertNullableNumber(value.admissions.operator_sla.within_60_minutes_percent, 'within_60_minutes_percent');
   assertString(value.admissions.operator_sla.definition, 'operator_sla.definition');
+
+  assertObject(value.lead_cohort_funnel, 'lead_cohort_funnel');
+  for (const key of ['eligible_leads', 'contacted_leads', 'payment_reported_current_unverified', 'linked_enrollment_leads', 'active_enrollment_leads', 'verified_paid_leads', 'verified_paid_active_access_leads'] as const) {
+    assertCount(value.lead_cohort_funnel[key], `lead_cohort_funnel.${key}`);
+  }
+  for (const key of ['contacted_percent', 'linked_enrollment_percent', 'verified_paid_active_access_percent'] as const) {
+    assertNullableNumber(value.lead_cohort_funnel[key], `lead_cohort_funnel.${key}`);
+  }
+  assertString(value.lead_cohort_funnel.definition, 'lead_cohort_funnel.definition');
 
   assertObject(value.payments, 'payments');
   if (!Array.isArray(value.payments.verified_in_range_by_currency)) throw new Error('Academy aggregate report currencies are invalid.');

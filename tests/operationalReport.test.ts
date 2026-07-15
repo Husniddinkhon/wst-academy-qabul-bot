@@ -22,6 +22,13 @@ const academy: AcademyReportMetrics = {
   verifiedPaidConversions: 2,
   activeFullyPaidStudents: 3,
   verifiedReceipts: [],
+  leadCohortEligible: 4,
+  leadCohortContacted: 3,
+  leadCohortPaymentReportedUnverified: 1,
+  leadCohortLinkedEnrollment: 2,
+  leadCohortActiveEnrollment: 2,
+  leadCohortVerifiedPaid: 2,
+  leadCohortVerifiedPaidActiveAccess: 1,
 };
 
 function dependencies(overrides: Record<string, unknown> = {}) {
@@ -52,6 +59,8 @@ test('formats a privacy-safe aggregate operational report with explicit Ads boun
   assert.match(text, /Next: .*ip-subnet/);
   assert.match(text, /New leads: 1/);
   assert.match(text, /Admissions 4 .* Verified paid 2/);
+  assert.match(text, /Lead cohort 4 \| contacted 3 \| payment reported unverified 1/);
+  assert.match(text, /Exact linked enrollment 2 \| active enrollment 2 \| verified-paid active access 1/);
   assert.match(text, /ads\.telegram\.org kabinetida qo‘lda tekshiriladi/);
   assert.match(text, /CAC\/ROAS: ad spend integratsiyasisiz hisoblanmaydi/);
   assert.match(text, /Operational alert recipients: delivered 2 \| pending 0 \| ready 0/);
