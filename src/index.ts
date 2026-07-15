@@ -20,6 +20,7 @@ import { startChannelScheduler } from './channelScheduler.js';
 import { createAcademyMetricsLoader } from './salesReporting.js';
 import { getBotLaunchOptions } from './botLaunch.js';
 import { JsonOperationalAlertStore } from './operationalAlerts.js';
+import { startLeadSlaEscalation } from './leadSla.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -395,6 +396,7 @@ async function bootstrap(): Promise<void> {
   await Promise.all(config.adminIds.map((chatId) => bot.telegram.setMyCommands([...publicCommands, ...adminCommands.slice(1)], { scope: { type: 'chat', chat_id: chatId } })));
 
   const followUpTimer = startFollowUpAutomation(bot, store, followUpStore);
+  const leadSlaTimer = startLeadSlaEscalation(store, operationalAlerts, bot.telegram, config.adminIds);
   const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);
   const channelSchedulerTimer = config.channelSchedulerEnabled
     ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelPublishStaleMs, channelMediaPolicy, { store: operationalAlerts, adminIds: config.adminIds })
@@ -406,6 +408,7 @@ async function bootstrap(): Promise<void> {
   const shutdown = async (signal: NodeJS.Signals) => {
     console.log(`Received ${signal}. Stopping bot...`);
     clearInterval(followUpTimer);
+    clearInterval(leadSlaTimer);
     if (dailyReportTimer) clearInterval(dailyReportTimer);
     if (channelSchedulerTimer) clearInterval(channelSchedulerTimer);
     bot.stop(signal);
