@@ -48,6 +48,7 @@ test('Academy reporting cannot be enabled without signed service identity', () =
 test('unsigned webhook remains valid when signing variables are absent', () => {
   process.env.BOT_TOKEN = 'test-token';
   process.env.LEAD_WEBHOOK_URL = 'https://n8n.example/leads';
+  delete process.env.ACADEMY_REPORT_BASE_URL;
   delete process.env.LEAD_WEBHOOK_SERVICE_ID;
   delete process.env.LEAD_WEBHOOK_SECRET;
   const config = loadConfig();
