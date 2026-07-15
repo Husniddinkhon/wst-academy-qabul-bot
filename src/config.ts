@@ -32,6 +32,9 @@ export interface AppConfig {
   isProduction: boolean;
   ai: AiConfig;
   databaseUrl?: string;
+  opsAggregatePort?: number;
+  opsAggregateServiceId?: string;
+  opsAggregateSecret?: string;
 }
 
 function parseBoolean(value: string | undefined): boolean {
@@ -106,6 +109,13 @@ export function loadConfig(): AppConfig {
   if (fallbackValues.some(Boolean) && !fallbackValues.every(Boolean)) {
     throw new Error('AI_FALLBACK_API_KEY, AI_FALLBACK_BASE_URL and AI_FALLBACK_MODEL must be configured together.');
   }
+  const opsAggregateSecret = process.env.OPS_AGGREGATE_SECRET || undefined;
+  const opsAggregateServiceId = process.env.OPS_AGGREGATE_SERVICE_ID?.trim() || undefined;
+  const opsAggregatePortRaw = process.env.OPS_AGGREGATE_PORT?.trim();
+  if ([opsAggregateSecret, opsAggregateServiceId, opsAggregatePortRaw].some(Boolean) && ![opsAggregateSecret, opsAggregateServiceId, opsAggregatePortRaw].every(Boolean)) {
+    throw new Error('OPS_AGGREGATE_PORT, OPS_AGGREGATE_SERVICE_ID and OPS_AGGREGATE_SECRET must be configured together.');
+  }
+  if (opsAggregateSecret && opsAggregateSecret.length < 32) throw new Error('OPS_AGGREGATE_SECRET must contain at least 32 characters.');
 
   return {
     botToken,
@@ -135,6 +145,9 @@ export function loadConfig(): AppConfig {
     channelImageHosts: (process.env.CHANNEL_IMAGE_HOSTS || '').split(',').map((host) => host.trim().toLowerCase()).filter(Boolean),
     isProduction: process.env.NODE_ENV === 'production',
     databaseUrl: process.env.DATABASE_URL || undefined,
+    opsAggregatePort: opsAggregatePortRaw ? parseBoundedInteger('OPS_AGGREGATE_PORT', opsAggregatePortRaw, 8381, 1024, 65535) : undefined,
+    opsAggregateServiceId,
+    opsAggregateSecret,
     ai: {
       enabled: parseBoolean(process.env.AI_ENABLED),
       provider: 'openai_compatible',

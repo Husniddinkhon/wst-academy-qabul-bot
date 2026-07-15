@@ -21,6 +21,7 @@ import { createAcademyMetricsLoader } from './salesReporting.js';
 import { getBotLaunchOptions } from './botLaunch.js';
 import { JsonOperationalAlertStore } from './operationalAlerts.js';
 import { startLeadSlaEscalation } from './leadSla.js';
+import { startQabulOpsAggregateServer } from './opsAggregateServer.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -226,6 +227,9 @@ async function bootstrap(): Promise<void> {
   const followUpStore = postgres ? new PostgresFollowUpStore(postgres) : new JsonFollowUpStore(config.followupsFile);
   const channelPosts = new JsonChannelPostStore(config.channelPostsFile);
   const operationalAlerts = new JsonOperationalAlertStore(config.opsAlertsFile);
+  const opsAggregateServer = config.opsAggregatePort && config.opsAggregateServiceId && config.opsAggregateSecret
+    ? startQabulOpsAggregateServer({ port: config.opsAggregatePort, serviceId: config.opsAggregateServiceId, secret: config.opsAggregateSecret, leads: store, alerts: operationalAlerts, followUps: followUpStore, webhookFailures: failureStore })
+    : undefined;
   const bot = new Telegraf<BotContext>(config.botToken);
   const stage = new Scenes.Stage<BotContext>([createRegistrationScene(store, config.adminIds, config.leadWebhookUrl, failureStore, followUpStore)]);
 
@@ -411,6 +415,7 @@ async function bootstrap(): Promise<void> {
     clearInterval(leadSlaTimer);
     if (dailyReportTimer) clearInterval(dailyReportTimer);
     if (channelSchedulerTimer) clearInterval(channelSchedulerTimer);
+    if (opsAggregateServer) await new Promise<void>((resolve) => opsAggregateServer.close(() => resolve()));
     bot.stop(signal);
     if (postgres) await postgres.close();
     process.exit(0);
