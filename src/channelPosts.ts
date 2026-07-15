@@ -125,7 +125,7 @@ export class JsonChannelPostStore {
   private async mutate<T>(operation: (db: ChannelPostDatabase) => T): Promise<T> {
     let resolveResult!: (value: T) => void; let rejectResult!: (reason?: unknown) => void;
     const result = new Promise<T>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
-    const run = async () => { try { const db = await this.read(); const value = operation(db); await this.write(db); resolveResult(value); } catch (error) { rejectResult(error); } };
+    const run = async () => { try { const db = await this.read(); const before = JSON.stringify(db); const value = operation(db); if (JSON.stringify(db) !== before) await this.write(db); resolveResult(value); } catch (error) { rejectResult(error); } };
     this.mutationQueue = this.mutationQueue.then(run, run); await this.mutationQueue; return result;
   }
   private async read(): Promise<ChannelPostDatabase> { try { const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as ChannelPostDatabase; return { posts: Array.isArray(parsed.posts) ? parsed.posts.map(normalizePost) : [] }; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { posts: [] }; throw error; } }
