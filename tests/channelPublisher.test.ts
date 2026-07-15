@@ -72,3 +72,45 @@ test('photo post uses sendPhoto and stores Telegram message id', async () => {
     assert.equal((await store.get(post.id))?.publishedMessageId, 303);
   } finally { await cleanup(); }
 });
+
+test('verified local channel image resolves only inside the configured asset root', async () => {
+  const { store, cleanup } = await fixture();
+  try {
+    const post = await store.createFromSource('Original local technical diagram caption', { kind: 'local_path', value: 'series/image.png' }, 12, 'technical-1');
+    let photo: unknown;
+    const sender: ChannelSender = {
+      async sendMessage() { throw new Error('unexpected text'); },
+      async sendPhoto(_chatId, input) { photo = input; return { message_id: 404 }; },
+    };
+    const result = await publishChannelPost(store, sender, '-1001', post.id, 23, false, { assetRoot: '/safe/assets', allowedHttpsHosts: [] });
+    assert.equal(result.ok, true);
+    assert.deepEqual(photo, { source: '/safe/assets/series/image.png', filename: 'image.png' });
+
+    const traversal = await store.createFromSource('Traversal must be rejected before Telegram', { kind: 'local_path', value: '../secret.png' }, 12, 'technical-2');
+    const blocked = await publishChannelPost(store, sender, '-1001', traversal.id, 23, false, { assetRoot: '/safe/assets', allowedHttpsHosts: [] });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.reason, 'send_failed');
+    assert.match(blocked.ok ? '' : blocked.error ?? '', /escapes CHANNEL_ASSET_ROOT/);
+  } finally { await cleanup(); }
+});
+
+test('hosted channel images require HTTPS and an exact configured host', async () => {
+  const { store, cleanup } = await fixture();
+  try {
+    let photo: unknown;
+    const sender: ChannelSender = {
+      async sendMessage() { throw new Error('unexpected text'); },
+      async sendPhoto(_chatId, input) { photo = input; return { message_id: 505 }; },
+    };
+    const allowed = await store.createFromSource('Approved hosted technical diagram caption', { kind: 'https_url', value: 'https://cdn.montag.uz/academy/image.png' }, 12, 'technical-3');
+    const published = await publishChannelPost(store, sender, '-1001', allowed.id, 23, false, { assetRoot: '/safe/assets', allowedHttpsHosts: ['cdn.montag.uz'] });
+    assert.equal(published.ok, true);
+    assert.equal(photo, 'https://cdn.montag.uz/academy/image.png');
+
+    const rejected = await store.createFromSource('Unlisted host must be rejected before Telegram', { kind: 'https_url', value: 'https://example.org/image.png' }, 12, 'technical-4');
+    const blocked = await publishChannelPost(store, sender, '-1001', rejected.id, 23, false, { assetRoot: '/safe/assets', allowedHttpsHosts: ['cdn.montag.uz'] });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.reason, 'send_failed');
+    assert.match(blocked.ok ? '' : blocked.error ?? '', /not allowed/);
+  } finally { await cleanup(); }
+});

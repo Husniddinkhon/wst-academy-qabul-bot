@@ -24,6 +24,8 @@ export interface AppConfig {
   channelSchedulerEnabled: boolean;
   channelSchedulerPollMs: number;
   channelPublishStaleMs: number;
+  channelAssetRoot: string;
+  channelImageHosts: string[];
   isProduction: boolean;
   ai: AiConfig;
   databaseUrl?: string;
@@ -116,6 +118,8 @@ export function loadConfig(): AppConfig {
     channelSchedulerEnabled: process.env.CHANNEL_SCHEDULER_ENABLED !== 'false',
     channelSchedulerPollMs: parseBoundedInteger('CHANNEL_SCHEDULER_POLL_MS', process.env.CHANNEL_SCHEDULER_POLL_MS, 30_000, 5_000, 300_000),
     channelPublishStaleMs: parseBoundedInteger('CHANNEL_PUBLISH_STALE_MS', process.env.CHANNEL_PUBLISH_STALE_MS, 600_000, 60_000, 86_400_000),
+    channelAssetRoot: process.env.CHANNEL_ASSET_ROOT?.trim() || './assets/channel',
+    channelImageHosts: (process.env.CHANNEL_IMAGE_HOSTS || '').split(',').map((host) => host.trim().toLowerCase()).filter(Boolean),
     isProduction: process.env.NODE_ENV === 'production',
     databaseUrl: process.env.DATABASE_URL || undefined,
     ai: {

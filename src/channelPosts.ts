@@ -26,7 +26,13 @@ export interface ChannelPost {
   lastError?: string;
   failedAt?: string;
   photoFileId?: string;
+  photoSource?: ChannelImageSource;
+  contentKey?: string;
 }
+
+export type ChannelImageSource =
+  | { kind: 'local_path'; value: string }
+  | { kind: 'https_url'; value: string };
 
 interface ChannelPostDatabase { posts: ChannelPost[] }
 export type ClaimResult = { ok: true; post: ChannelPost; attemptId: string } | { ok: false; reason: 'not_found' | 'not_publishable'; post?: ChannelPost };
@@ -39,6 +45,14 @@ export class JsonChannelPostStore {
   async create(text: string, photoFileId?: string, createdBy?: number): Promise<ChannelPost> {
     return this.mutate((db) => {
       const post: ChannelPost = { id: randomUUID().slice(0, 8), text, photoFileId, status: 'Draft', createdAt: new Date().toISOString(), createdBy, attempts: 0 };
+      db.posts.push(post);
+      return post;
+    });
+  }
+
+  async createFromSource(text: string, photoSource: ChannelImageSource, createdBy?: number, contentKey?: string): Promise<ChannelPost> {
+    return this.mutate((db) => {
+      const post: ChannelPost = { id: randomUUID().slice(0, 8), text, photoSource, contentKey, status: 'Draft', createdAt: new Date().toISOString(), createdBy, attempts: 0 };
       db.posts.push(post);
       return post;
     });

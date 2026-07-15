@@ -4,7 +4,7 @@ import type { JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { formatLead, formatLeadList } from './messages.js';
 import { deliverLeadWebhook, retryFailedWebhooks } from './webhook.js';
 import type { JsonChannelPostStore } from './channelPosts.js';
-import { publishChannelPost } from './channelPublisher.js';
+import { publishChannelPost, type ChannelMediaPolicy } from './channelPublisher.js';
 import { buildSalesReport, createAcademyMetricsLoader, formatSalesReport, parseSalesReportRange } from './salesReporting.js';
 import { formatTashkentSchedule, parseTashkentSchedule } from './channelScheduler.js';
 
@@ -56,7 +56,7 @@ async function safeStoreStats(store: JsonLeadStore): Promise<string[]> {
   }
 }
 
-export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[], failureStore: JsonWebhookFailureStore, leadWebhookUrl: string | undefined, channelPosts: JsonChannelPostStore, channelChatId: string, botToken: string): void {
+export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[], failureStore: JsonWebhookFailureStore, leadWebhookUrl: string | undefined, channelPosts: JsonChannelPostStore, channelChatId: string, botToken: string, channelMediaPolicy?: ChannelMediaPolicy): void {
   const guard = async (ctx: BotContext): Promise<boolean> => { if (isAdmin(ctx, adminIds)) return true; await ctx.reply('⛔ Bu buyruq faqat adminlar uchun.'); return false; };
   const commandText = (ctx: BotContext): string => ctx.message && 'text' in ctx.message && ctx.message.text ? ctx.message.text : '';
   bot.command('id', async (ctx) => ctx.reply(`Sizning Telegram ID: ${ctx.from?.id ?? 'aniqlanmadi'}`));
@@ -224,7 +224,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     if (!(await guard(ctx))) return;
     const id = commandText(ctx).split(/\s+/)[1]?.trim();
     if (!id || !ctx.from?.id) return ctx.reply(`Format: /channel_${retryFailed ? 'retry' : 'publish'} <id>`);
-    const result = await publishChannelPost(channelPosts, bot.telegram, channelChatId, id, ctx.from.id, retryFailed);
+    const result = await publishChannelPost(channelPosts, bot.telegram, channelChatId, id, ctx.from.id, retryFailed, channelMediaPolicy);
     if (result.ok) return ctx.reply(`Kanalga yuborildi: ${result.post.id}, message ${result.post.publishedMessageId}`);
     if (result.reason === 'send_failed') {
       console.error('Channel publish failed:', result.error);

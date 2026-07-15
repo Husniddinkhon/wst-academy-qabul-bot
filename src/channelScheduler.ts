@@ -1,31 +1,31 @@
 import type { JsonChannelPostStore } from './channelPosts.js';
-import { publishClaimedChannelPost, type ChannelSender, type PublishResult } from './channelPublisher.js';
+import { publishClaimedChannelPost, type ChannelMediaPolicy, type ChannelSender, type PublishResult } from './channelPublisher.js';
 
 export const CHANNEL_TIME_ZONE = 'Asia/Tashkent';
 export const SCHEDULER_PUBLISHER_ID = 0;
 
 export interface SchedulerRunResult { recovered: number; claimed: number; published: number; failed: number }
 
-export async function runChannelSchedulerOnce(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, now = new Date(), staleClaimMs = 10 * 60_000): Promise<SchedulerRunResult> {
+export async function runChannelSchedulerOnce(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, now = new Date(), staleClaimMs = 10 * 60_000, mediaPolicy?: ChannelMediaPolicy): Promise<SchedulerRunResult> {
   const recovered = await store.recoverStalePublishing(new Date(now.getTime() - staleClaimMs));
   const result = { recovered: recovered.length, claimed: 0, published: 0, failed: 0 };
   for (let i = 0; i < 20; i += 1) {
     const claim = await store.claimNextDue(now, SCHEDULER_PUBLISHER_ID);
     if (!claim.ok) break;
     result.claimed += 1;
-    const published: PublishResult = await publishClaimedChannelPost(store, sender, channelChatId, claim.post, claim.attemptId, now);
+    const published: PublishResult = await publishClaimedChannelPost(store, sender, channelChatId, claim.post, claim.attemptId, now, mediaPolicy);
     if (published.ok) result.published += 1; else result.failed += 1;
   }
   return result;
 }
 
-export function startChannelScheduler(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, pollMs: number, staleClaimMs: number): NodeJS.Timeout {
+export function startChannelScheduler(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, pollMs: number, staleClaimMs: number, mediaPolicy?: ChannelMediaPolicy): NodeJS.Timeout {
   let running = false;
   const run = async () => {
     if (running) return;
     running = true;
     try {
-      const result = await runChannelSchedulerOnce(store, sender, channelChatId, new Date(), staleClaimMs);
+      const result = await runChannelSchedulerOnce(store, sender, channelChatId, new Date(), staleClaimMs, mediaPolicy);
       if (result.recovered || result.claimed || result.failed) console.info(JSON.stringify({ event: 'channel_scheduler_run', ...result }));
     } catch (error) {
       console.error('Channel scheduler failed:', error instanceof Error ? error.message : String(error));

@@ -1,0 +1,20 @@
+import { execFileSync } from 'node:child_process';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { Telegram } from 'telegraf';
+
+const root = path.resolve(import.meta.dirname, '..');
+execFileSync(process.execPath, [path.join(root, 'scripts', 'verify-channel-assets.mjs')], { cwd: root, stdio: 'inherit' });
+const manifest = JSON.parse(await readFile(path.join(root, 'assets', 'channel', 'manifest.json'), 'utf8')) as { avatar: { png: string; sha256: string } };
+const token = process.env.BOT_TOKEN;
+const channel = process.env.CHANNEL_CHAT_ID || '-1004297032922';
+if (!token) throw new Error('BOT_TOKEN is required.');
+const telegram = new Telegram(token);
+const avatarPath = path.join(root, manifest.avatar.png);
+await telegram.setChatPhoto(channel, { source: avatarPath, filename: path.basename(avatarPath) });
+const chat = await telegram.getChat(channel);
+if (!('photo' in chat) || !chat.photo?.big_file_id) throw new Error('Telegram did not report a channel profile photo after setChatPhoto.');
+const audit = { appliedAt: new Date().toISOString(), channel, asset: manifest.avatar.png, sha256: manifest.avatar.sha256, telegramPhotoPresent: true };
+await mkdir(path.join(root, 'audit'), { recursive: true });
+await writeFile(path.join(root, 'audit', 'channel-profile.json'), `${JSON.stringify(audit, null, 2)}\n`, 'utf8');
+console.log(JSON.stringify(audit));

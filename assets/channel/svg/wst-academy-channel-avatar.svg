@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="800" viewBox="0 0 800 800" role="img" aria-labelledby="avatar-title avatar-description">
+<title id="avatar-title">WST Academy channel avatar</title><desc id="avatar-description">Original WST Academy typographic wordmark on a dark blue circular-safe background.</desc>
+<rect width="800" height="800" fill="#07162D"/><circle cx="400" cy="400" r="350" fill="#0A2142" stroke="#20D6E8" stroke-width="18"/>
+<circle cx="400" cy="268" r="82" fill="#07162D" stroke="#20D6E8" stroke-width="16"/><circle cx="400" cy="268" r="32" fill="#3A86FF"/><circle cx="400" cy="268" r="10" fill="#F7FBFF"/>
+<text x="400" y="485" font-family="DejaVu Sans, Arial, sans-serif" font-size="188" font-weight="900" fill="#F7FBFF" text-anchor="middle">WST</text><text x="400" y="585" font-family="DejaVu Sans, Arial, sans-serif" font-size="64" font-weight="850" fill="#20D6E8" text-anchor="middle">ACADEMY</text>
+<rect x="246" y="630" width="308" height="12" rx="6" fill="#3A86FF"/>
+</svg>

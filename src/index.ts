@@ -259,7 +259,8 @@ async function bootstrap(): Promise<void> {
     await ctx.reply(getPhoneRequestAnswer('Operator bilan bog‘lanish'), phoneRequestKeyboard());
   });
 
-  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken);
+  const channelMediaPolicy = { assetRoot: config.channelAssetRoot, allowedHttpsHosts: config.channelImageHosts };
+  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken, channelMediaPolicy);
 
   bot.on('photo', async (ctx) => {
     if (!isAdmin(ctx, config.adminIds)) return;
@@ -383,7 +384,7 @@ async function bootstrap(): Promise<void> {
   const followUpTimer = startFollowUpAutomation(bot, store, followUpStore);
   const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);
   const channelSchedulerTimer = config.channelSchedulerEnabled
-    ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelPublishStaleMs)
+    ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelPublishStaleMs, channelMediaPolicy)
     : undefined;
 
   await bot.launch({ dropPendingUpdates: config.isProduction });
