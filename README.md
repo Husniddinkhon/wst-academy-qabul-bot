@@ -138,9 +138,16 @@ npm run build
 npm test
 npm run content:verify
 
+# One-time migration when the existing process was created without this file:
+/usr/bin/pm2 delete wst-academy-qabul-bot
+env -i HOME=/root PATH=/usr/bin:/bin PM2_HOME=/root/.pm2 \
+  /usr/bin/pm2 start ecosystem.config.cjs \
+  --only wst-academy-qabul-bot --env production
+
+# Routine release after the one-time migration:
 env -i HOME=/root PATH=/usr/bin:/bin PM2_HOME=/root/.pm2 \
   /usr/bin/pm2 startOrReload ecosystem.config.cjs \
-  --only wst-academy-qabul-bot --update-env
+  --only wst-academy-qabul-bot --env production --update-env
 /usr/bin/pm2 save
 npm run pm2:audit-env
 ```

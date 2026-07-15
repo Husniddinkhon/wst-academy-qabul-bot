@@ -25,6 +25,7 @@ test('PM2 drops inherited server environment and injects only non-secret app met
   assert.equal(app.filter_env, true);
   assert.equal(policy.DROP_ALL_GLOBAL_ENV, true);
   assert.deepEqual(app.env, { NODE_ENV: 'production' });
+  assert.deepEqual(app.env_production, { NODE_ENV: 'production' });
 
   const inherited = Object.fromEntries([
     ...policy.FORBIDDEN_ENV_EXACT,
@@ -32,7 +33,11 @@ test('PM2 drops inherited server environment and injects only non-secret app met
     'UNRELATED_SERVICE_TOKEN',
   ].map((name) => [name, 'must-not-survive']));
   const filtered = app.filter_env === true ? {} : inherited;
-  const effective = { ...filtered, ...(app.env as Record<string, string>) };
+  const effective = {
+    ...filtered,
+    ...(app.env as Record<string, string>),
+    ...(app.env_production as Record<string, string>),
+  };
   assert.deepEqual(Object.keys(effective), ['NODE_ENV']);
   assert.equal(Object.keys(effective).some(policy.isForbiddenEnvName), false);
 });
