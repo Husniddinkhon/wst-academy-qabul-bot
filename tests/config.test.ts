@@ -53,3 +53,36 @@ test('loads a complete fallback AI provider configuration', () => {
   assert.equal(config.ai.fallback?.model, 'qwen-flash');
   assert.equal(config.ai.fallback?.temperature, 0.2);
 });
+
+test('loads bounded AI reliability and provider cost controls', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.AI_REQUEST_TIMEOUT_MS = '12000';
+  process.env.AI_MAX_OUTPUT_TOKENS = '256';
+  process.env.AI_MAX_OUTPUT_TOKENS_ENABLED = 'false';
+  process.env.AI_RATE_LIMIT_MAX_REQUESTS = '4';
+  process.env.AI_RATE_LIMIT_WINDOW_MS = '90000';
+  process.env.AI_CIRCUIT_FAILURE_THRESHOLD = '2';
+  process.env.AI_CIRCUIT_BASE_BACKOFF_MS = '5000';
+  process.env.AI_CIRCUIT_MAX_BACKOFF_MS = '60000';
+  const config = loadConfig();
+  assert.equal(config.ai.requestTimeoutMs, 12_000);
+  assert.equal(config.ai.maxOutputTokens, 256);
+  assert.equal(config.ai.supportsMaxOutputTokens, false);
+  assert.deepEqual(config.ai.reliability, {
+    rateLimitMaxRequests: 4,
+    rateLimitWindowMs: 90_000,
+    circuitFailureThreshold: 2,
+    circuitBaseBackoffMs: 5_000,
+    circuitMaxBackoffMs: 60_000,
+  });
+});
+
+test('rejects unsafe AI reliability control values without printing secrets', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.AI_API_KEY = 'secret-value-must-not-appear';
+  process.env.AI_REQUEST_TIMEOUT_MS = '999999';
+  assert.throws(() => loadConfig(), (error: unknown) => error instanceof Error && /AI_REQUEST_TIMEOUT_MS/.test(error.message) && !error.message.includes('secret-value-must-not-appear'));
+  process.env.AI_REQUEST_TIMEOUT_MS = '15000';
+  process.env.AI_MAX_OUTPUT_TOKENS = '0';
+  assert.throws(() => loadConfig(), /AI_MAX_OUTPUT_TOKENS/);
+});

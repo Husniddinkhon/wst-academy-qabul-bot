@@ -35,6 +35,14 @@ function parseTemperature(value: string | undefined): number {
   return Number.isFinite(parsed) ? parsed : 0.3;
 }
 
+function parseBoundedInteger(name: string, value: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = value?.trim() ? Number(value) : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}.`);
+  }
+  return parsed;
+}
+
 function parseReportHour(value: string | undefined): number {
   const parsed = Number(value ?? 21);
   return Number.isInteger(parsed) && parsed >= 0 && parsed <= 23 ? parsed : 21;
@@ -65,6 +73,8 @@ export function loadConfig(): AppConfig {
   const leadWebhookServiceId = process.env.LEAD_WEBHOOK_SERVICE_ID?.trim() || undefined;
   const leadWebhookSecret = process.env.LEAD_WEBHOOK_SECRET || undefined;
   const fallbackValues = [process.env.AI_FALLBACK_API_KEY, process.env.AI_FALLBACK_BASE_URL, process.env.AI_FALLBACK_MODEL];
+  const requestTimeoutMs = parseBoundedInteger('AI_REQUEST_TIMEOUT_MS', process.env.AI_REQUEST_TIMEOUT_MS, 15_000, 1_000, 60_000);
+  const maxOutputTokens = parseBoundedInteger('AI_MAX_OUTPUT_TOKENS', process.env.AI_MAX_OUTPUT_TOKENS, 300, 32, 2_048);
 
   if (!botToken) {
     throw new Error('BOT_TOKEN is required. Copy .env.example to .env and set your Telegram bot token.');
@@ -109,6 +119,16 @@ export function loadConfig(): AppConfig {
       baseUrl: process.env.AI_BASE_URL || undefined,
       model: process.env.AI_MODEL || undefined,
       temperature: parseTemperature(process.env.AI_TEMPERATURE),
+      requestTimeoutMs,
+      maxOutputTokens,
+      supportsMaxOutputTokens: process.env.AI_MAX_OUTPUT_TOKENS_ENABLED !== 'false',
+      reliability: {
+        rateLimitMaxRequests: parseBoundedInteger('AI_RATE_LIMIT_MAX_REQUESTS', process.env.AI_RATE_LIMIT_MAX_REQUESTS, 6, 1, 100),
+        rateLimitWindowMs: parseBoundedInteger('AI_RATE_LIMIT_WINDOW_MS', process.env.AI_RATE_LIMIT_WINDOW_MS, 60_000, 1_000, 3_600_000),
+        circuitFailureThreshold: parseBoundedInteger('AI_CIRCUIT_FAILURE_THRESHOLD', process.env.AI_CIRCUIT_FAILURE_THRESHOLD, 3, 1, 20),
+        circuitBaseBackoffMs: parseBoundedInteger('AI_CIRCUIT_BASE_BACKOFF_MS', process.env.AI_CIRCUIT_BASE_BACKOFF_MS, 30_000, 1_000, 600_000),
+        circuitMaxBackoffMs: parseBoundedInteger('AI_CIRCUIT_MAX_BACKOFF_MS', process.env.AI_CIRCUIT_MAX_BACKOFF_MS, 300_000, 1_000, 3_600_000),
+      },
       fallback: fallbackValues.every(Boolean)
         ? {
             provider: 'openai_compatible',
@@ -116,6 +136,9 @@ export function loadConfig(): AppConfig {
             baseUrl: process.env.AI_FALLBACK_BASE_URL,
             model: process.env.AI_FALLBACK_MODEL,
             temperature: parseTemperature(process.env.AI_FALLBACK_TEMPERATURE),
+            requestTimeoutMs: parseBoundedInteger('AI_FALLBACK_REQUEST_TIMEOUT_MS', process.env.AI_FALLBACK_REQUEST_TIMEOUT_MS, requestTimeoutMs, 1_000, 60_000),
+            maxOutputTokens: parseBoundedInteger('AI_FALLBACK_MAX_OUTPUT_TOKENS', process.env.AI_FALLBACK_MAX_OUTPUT_TOKENS, maxOutputTokens, 32, 2_048),
+            supportsMaxOutputTokens: process.env.AI_FALLBACK_MAX_OUTPUT_TOKENS_ENABLED !== 'false',
           }
         : undefined,
     },

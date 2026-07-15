@@ -1,4 +1,5 @@
 import { courseInfo } from './course.js';
+import { AiReliabilityController, type AiProviderIdentity, type AiReliabilityControls, type AiTokenUsage } from './aiReliability.js';
 
 export type LeadScore = 'HOT' | 'WARM' | 'COLD';
 
@@ -8,11 +9,15 @@ export interface AiProviderConfig {
   baseUrl?: string;
   model?: string;
   temperature: number;
+  requestTimeoutMs?: number;
+  maxOutputTokens?: number;
+  supportsMaxOutputTokens?: boolean;
 }
 
 export interface AiConfig extends AiProviderConfig {
   enabled: boolean;
   fallback?: AiProviderConfig;
+  reliability?: Partial<AiReliabilityControls>;
 }
 
 export interface AiAgentResult {
@@ -21,8 +26,22 @@ export interface AiAgentResult {
   reason: string;
 }
 
+export interface AiRequestContext {
+  actorId?: string;
+  reliability?: AiReliabilityController;
+}
+
 const PHONE_PATTERN = /(?:\+?998[\s()\-.]*)?(?:\d[\s()\-.]*){9}/;
-const AI_REQUEST_TIMEOUT_MS = 15_000;
+export const DEFAULT_AI_RELIABILITY: AiReliabilityControls = {
+  rateLimitMaxRequests: 6,
+  rateLimitWindowMs: 60_000,
+  circuitFailureThreshold: 3,
+  circuitBaseBackoffMs: 30_000,
+  circuitMaxBackoffMs: 300_000,
+};
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_MAX_OUTPUT_TOKENS = 300;
+const sharedReliability = new AiReliabilityController();
 
 const HOT_PATTERNS = [
   /\b(narx|qancha|necha pul|to['‘’`]?lov|tolov|bo['‘’`]?lib|bolib|muddatli|rassrochka|boshlan|start)\b/i,
@@ -102,7 +121,7 @@ export function scoreLead(message: string): { score: LeadScore; reason: string }
   return { score: 'COLD', reason: 'Kuchsiz yoki kursga aloqasiz qiziqish.' };
 }
 
-export async function answerWithAiAgent(message: string, config: AiConfig): Promise<AiAgentResult> {
+export async function answerWithAiAgent(message: string, config: AiConfig, context: AiRequestContext = {}): Promise<AiAgentResult> {
   const scored = scoreLead(message);
   const cyrillic = hasCyrillic(message);
 
@@ -126,14 +145,18 @@ export async function answerWithAiAgent(message: string, config: AiConfig): Prom
     throw new Error('AI agent is not fully configured.');
   }
 
+  const reliability = context.reliability ?? sharedReliability;
+  const controls = normalizeReliability(config.reliability);
+  reliability.consumeRateLimit(context.actorId, providerIdentity(config), controls);
+
   try {
-    const answer = await requestProvider(message, cyrillic, config);
+    const answer = await requestProvider(message, cyrillic, config, reliability, controls);
     return { answer, ...scored };
   } catch (primaryError) {
     if (!isProviderReady(config.fallback)) throw primaryError;
 
     try {
-      const answer = await requestProvider(message, cyrillic, config.fallback);
+      const answer = await requestProvider(message, cyrillic, config.fallback, reliability, controls);
       return { answer, ...scored };
     } catch {
       throw new Error('Primary and fallback AI providers are unavailable.');
@@ -141,11 +164,13 @@ export async function answerWithAiAgent(message: string, config: AiConfig): Prom
   }
 }
 
-async function requestProvider(message: string, cyrillic: boolean, config: AiProviderConfig): Promise<string> {
+async function requestProvider(message: string, cyrillic: boolean, config: AiProviderConfig, reliability: AiReliabilityController, controls: AiReliabilityControls): Promise<string> {
   if (!isProviderReady(config)) {
     throw new Error('AI provider is not fully configured.');
   }
 
+  const identity = providerIdentity(config);
+  const attempt = reliability.beforeProvider(identity);
   const requestBody: Record<string, unknown> = {
     model: config.model,
     temperature: config.temperature,
@@ -154,6 +179,9 @@ async function requestProvider(message: string, cyrillic: boolean, config: AiPro
       { role: 'user', content: message },
     ],
   };
+  if (config.supportsMaxOutputTokens !== false) {
+    requestBody.max_tokens = config.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  }
 
   // DeepSeek V4 defaults to thinking mode. A short Telegram sales reply does
   // not need chain-of-thought; disabling it reduces latency/cost and ensures
@@ -163,7 +191,7 @@ async function requestProvider(message: string, cyrillic: boolean, config: AiPro
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), AI_REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
   let response: Response;
 
   try {
@@ -178,32 +206,46 @@ async function requestProvider(message: string, cyrillic: boolean, config: AiPro
     });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
+      reliability.finishProvider(identity, attempt, 'timeout', controls);
       throw new Error('AI provider request timed out.');
     }
+    reliability.finishProvider(identity, attempt, 'network_error', controls);
     throw error;
   } finally {
     clearTimeout(timeout);
   }
 
   if (!response.ok) {
+    reliability.finishProvider(identity, attempt, 'http_error', controls);
     throw new Error(`AI provider returned ${response.status}`);
   }
 
-  const data = (await response.json()) as { choices?: Array<{ message?: { content?: string | null } }> };
+  let data: { choices?: Array<{ message?: { content?: string | null } }>; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } };
+  try {
+    data = (await response.json()) as typeof data;
+  } catch {
+    reliability.finishProvider(identity, attempt, 'empty_response', controls);
+    throw new Error('AI provider returned an invalid response.');
+  }
   const answer = formatAiAnswer(data.choices?.[0]?.message?.content);
 
   if (!answer) {
+    reliability.finishProvider(identity, attempt, 'empty_response', controls, tokenUsage(data.usage));
     throw new Error('AI provider returned an empty answer.');
   }
 
+  reliability.finishProvider(identity, attempt, 'success', controls, tokenUsage(data.usage));
   return answer;
 }
 
 export function getTruthfulFallbackAnswer(message = ''): string {
   return hasCyrillic(message)
-    ? 'AI жавоби ҳозир мавжуд эмас. Курс маълумотлари ва бепул CCTV дарси менюда очиқ; бу хабар оператор боғланишини англатмайди.'
-    : 'AI javobi hozir mavjud emas. Kurs ma’lumotlari va bepul CCTV darsi menyuda ochiq; bu xabar operator bog‘lanishini anglatmaydi.';
+    ? `AI жавоби ҳозир мавжуд эмас. Операторга ${courseInfo.operator} орқали ёзинг ёки “Operator bilan bog‘lanish” тугмасини босинг. Бу хабар операторга ариза юборилганини англатмайди.`
+    : `AI javobi hozir mavjud emas. Operatorga ${courseInfo.operator} orqali yozing yoki “Operator bilan bog‘lanish” tugmasini bosing. Bu xabar operatorga ariza yuborilganini anglatmaydi.`;
 }
+
+export function getAiReliabilitySnapshot() { return sharedReliability.snapshot(); }
+export function resetAiReliabilityState(): void { sharedReliability.reset(); }
 
 export function getPhoneRequestAnswer(message: string): string {
   return hasCyrillic(message) ? PHONE_REQUEST_ANSWER_CYRILLIC : PHONE_REQUEST_ANSWER;
@@ -274,6 +316,25 @@ function isDeepSeekBaseUrl(baseUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+function normalizeReliability(value: Partial<AiReliabilityControls> | undefined): AiReliabilityControls {
+  return { ...DEFAULT_AI_RELIABILITY, ...value };
+}
+
+function providerIdentity(config: AiProviderConfig): AiProviderIdentity {
+  let provider = 'openai_compatible';
+  try {
+    const hostname = new URL(config.baseUrl ?? '').hostname.toLowerCase();
+    if (hostname === 'api.deepseek.com' || hostname.endsWith('.api.deepseek.com')) provider = 'deepseek';
+    else if (hostname === 'dashscope.aliyuncs.com' || hostname.endsWith('.dashscope.aliyuncs.com') || hostname.endsWith('.maas.aliyuncs.com')) provider = 'qwen';
+  } catch { /* A malformed URL is rejected by fetch without being logged. */ }
+  return { provider, model: config.model || 'unconfigured' };
+}
+
+function tokenUsage(usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined): AiTokenUsage | undefined {
+  if (!usage) return undefined;
+  return { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens, totalTokens: usage.total_tokens };
 }
 
 function buildSystemPrompt(cyrillic: boolean): string {
