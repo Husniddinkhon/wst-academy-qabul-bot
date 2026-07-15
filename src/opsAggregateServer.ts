@@ -2,7 +2,9 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 
 const PATH = '/v1/ops/aggregate';
+export const RECONCILIATION_PATH = '/v1/reconciliation/candidates';
 const MAX_SKEW_MS = 60_000;
+const MAX_RECONCILIATION_LEADS = 5_000;
 
 export interface UnifiedOpsAggregate {
   schemaVersion: 1;
@@ -18,10 +20,62 @@ interface Dependencies {
   serviceId: string;
   secret: string;
   port: number;
-  leads: { all(): Promise<Array<{ status: string; createdAt: string }>> };
+  leads: { all(): Promise<Array<{ telegramId: number; status: string; source?: string; campaignId?: string; phone?: string; createdAt: string; updatedAt?: string }>> };
   alerts: { snapshot(): Promise<{ records: Record<string, { recipients: Record<string, { deliveredAt?: string }> }> }> };
   followUps: { all(): Promise<Array<{ registrationCompleted?: boolean; lastSentAt?: string }>> };
   webhookFailures: { all(): Promise<unknown[]> };
+}
+
+export interface ReconciliationCandidateSnapshot {
+  schemaVersion: 1;
+  service: string;
+  generatedAt: string;
+  expiresAt: string;
+  candidates: Array<{
+    botLeadRef: string;
+    telegramFingerprint: string;
+    phoneFingerprint: string | null;
+    maskedPhone: string | null;
+    status: string;
+    source: string;
+    campaign: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+}
+
+export async function buildQabulReconciliationSnapshot(
+  deps: Pick<Dependencies, 'serviceId' | 'secret' | 'leads'>,
+  now = new Date(),
+): Promise<ReconciliationCandidateSnapshot> {
+  const leads = await deps.leads.all();
+  if (leads.length > MAX_RECONCILIATION_LEADS) throw new Error('candidate_set_too_large');
+  const candidates = leads.map((lead) => {
+    if (!Number.isSafeInteger(lead.telegramId) || lead.telegramId <= 0) throw new Error('invalid_lead_identity');
+    const normalizedPhone = normalizeUzbekPhone(lead.phone);
+    const source = safeAttribution(lead.source) ?? 'unknown';
+    const campaign = safeAttribution(lead.campaignId);
+    const updatedAt = lead.updatedAt ?? lead.createdAt;
+    if (!validTimestamp(lead.createdAt) || !validTimestamp(updatedAt)) throw new Error('invalid_lead_timestamp');
+    return {
+      botLeadRef: fingerprint(deps.secret, 'bot-lead', String(lead.telegramId)),
+      telegramFingerprint: fingerprint(deps.secret, 'telegram', String(lead.telegramId)),
+      phoneFingerprint: normalizedPhone ? fingerprint(deps.secret, 'phone', normalizedPhone) : null,
+      maskedPhone: normalizedPhone ? maskPhone(normalizedPhone) : null,
+      status: safeStatus(lead.status),
+      source,
+      campaign,
+      createdAt: lead.createdAt,
+      updatedAt,
+    };
+  }).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return {
+    schemaVersion: 1,
+    service: deps.serviceId,
+    generatedAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + MAX_SKEW_MS).toISOString(),
+    candidates,
+  };
 }
 
 export async function buildQabulOpsAggregate(deps: Pick<Dependencies, 'serviceId' | 'leads' | 'alerts' | 'followUps' | 'webhookFailures'>, now = new Date()): Promise<UnifiedOpsAggregate> {
@@ -67,20 +121,24 @@ export function startQabulOpsAggregateServer(deps: Dependencies): Server {
   const nonces = new Map<string, number>();
   const server = createServer(async (request, response) => {
     response.setHeader('content-type', 'application/json; charset=utf-8');
-    if (request.method !== 'GET' || request.url !== PATH) return write(response, 404, { error: 'not_found' });
+    const requestPath = request.url ?? '';
+    if (request.method !== 'GET' || ![PATH, RECONCILIATION_PATH].includes(requestPath)) return write(response, 404, { error: 'not_found' });
     const timestamp = header(request.headers['x-ops-timestamp']);
     const nonce = header(request.headers['x-ops-nonce']);
     const service = header(request.headers['x-ops-service']);
     const signature = header(request.headers['x-ops-signature']);
     const parsedTimestamp = Number(timestamp);
     prune(nonces);
-    const canonical = `${service}\n${timestamp}\n${nonce}\nGET\n${PATH}`;
+    const canonical = `${service}\n${timestamp}\n${nonce}\nGET\n${requestPath}`;
     if (service !== deps.serviceId || !/^[a-f0-9]{32}$/.test(nonce) || !Number.isFinite(parsedTimestamp) || Math.abs(Date.now() - parsedTimestamp) > MAX_SKEW_MS || nonces.has(nonce) || !valid(signature, sign(deps.secret, canonical))) {
       return write(response, 401, { error: 'unauthorized' });
     }
     nonces.set(nonce, Date.now() + MAX_SKEW_MS);
     try {
-      const body = JSON.stringify(await buildQabulOpsAggregate(deps));
+      const payload = requestPath === PATH
+        ? await buildQabulOpsAggregate(deps)
+        : await buildQabulReconciliationSnapshot(deps);
+      const body = JSON.stringify(payload);
       response.setHeader('x-ops-response-signature', sign(deps.secret, `${deps.serviceId}\n${timestamp}\n${nonce}\n${body}`));
       response.statusCode = 200;
       response.end(body);
@@ -100,3 +158,29 @@ function write(response: import('node:http').ServerResponse, status: number, bod
 export function createOpsRequestHeaders(serviceId: string, secret: string, timestamp = String(Date.now()), nonce = randomBytes(16).toString('hex')): Record<string, string> {
   return { 'x-ops-service': serviceId, 'x-ops-timestamp': timestamp, 'x-ops-nonce': nonce, 'x-ops-signature': sign(secret, `${serviceId}\n${timestamp}\n${nonce}\nGET\n${PATH}`) };
 }
+
+export function createSignedGetHeaders(serviceId: string, secret: string, path: string, timestamp = String(Date.now()), nonce = randomBytes(16).toString('hex')): Record<string, string> {
+  if (![PATH, RECONCILIATION_PATH].includes(path)) throw new Error('unsupported signed path');
+  return { 'x-ops-service': serviceId, 'x-ops-timestamp': timestamp, 'x-ops-nonce': nonce, 'x-ops-signature': sign(secret, `${serviceId}\n${timestamp}\n${nonce}\nGET\n${path}`) };
+}
+
+function fingerprint(secret: string, namespace: string, value: string): string {
+  return createHmac('sha256', secret).update(`wst-reconciliation:v1:${namespace}:${value}`).digest('hex');
+}
+function normalizeUzbekPhone(value: string | undefined): string | null {
+  const digits = (value ?? '').replace(/\D/g, '');
+  if (/^998\d{9}$/.test(digits)) return digits;
+  if (/^\d{9}$/.test(digits)) return `998${digits}`;
+  return null;
+}
+function maskPhone(value: string): string { return `+${value.slice(0, 3)} ** *** ** ${value.slice(-2)}`; }
+function safeAttribution(value: string | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized && /^[A-Za-z][A-Za-z0-9_.:-]{0,199}$/.test(normalized) ? normalized : null;
+}
+function safeStatus(value: string): string {
+  const allowed = new Set(['New', 'Warm', 'Hot', 'RegistrationCompleted', 'CallRequested', 'OperatorContacted', 'Paid', 'Rejected']);
+  if (!allowed.has(value)) throw new Error('invalid_lead_status');
+  return value;
+}
+function validTimestamp(value: string): boolean { const parsed = new Date(value); return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value; }
