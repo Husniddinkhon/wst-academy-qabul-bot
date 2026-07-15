@@ -139,7 +139,9 @@ if (contrast(palette.white, palette.navy) < 7 || contrast(palette.cyan, palette.
 await mkdir(svgDir, { recursive: true });
 const assets = [];
 for (const item of series) {
-  if (!item.caption.endsWith('@wst_academy_qabul_bot')) throw new Error(`${item.slug}: exact Academy CTA is required.`);
+  const expectedCampaignId = `channel_${item.contentKey.replaceAll('-', '_')}`;
+  const expectedDeepLink = `https://t.me/wst_academy_qabul_bot?start=${expectedCampaignId}`;
+  if (item.campaignId !== expectedCampaignId || !item.caption.endsWith(expectedDeepLink)) throw new Error(`${item.slug}: unique tracked Academy CTA is required.`);
   if (item.caption.length > 1024) throw new Error(`${item.slug}: Telegram caption exceeds 1024 characters.`);
   if (!item.altText || item.altText.length < 40) throw new Error(`${item.slug}: meaningful accessibility description is required.`);
   const svgPath = path.join(svgDir, `${item.slug}.svg`);
@@ -149,6 +151,7 @@ for (const item of series) {
   const png = await readFile(pngPath);
   assets.push({
     contentKey: item.contentKey,
+    campaignId: item.campaignId,
     scheduledAt: item.scheduledAt,
     topic: item.topic,
     caption: item.caption,

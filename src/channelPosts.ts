@@ -75,6 +75,20 @@ export class JsonChannelPostStore {
     });
   }
 
+  async refreshScheduledContent(contentKey: string, scheduledAt: string, text: string, photoSource: ChannelImageSource, campaignId: string): Promise<MutationResult> {
+    return this.mutate((db) => {
+      const index = db.posts.findIndex((post) => post.contentKey === contentKey);
+      if (index < 0) return { ok: false, reason: 'not_found' } as const;
+      const current = normalizePost(db.posts[index]);
+      if (current.status !== 'Scheduled' || current.scheduledAt !== scheduledAt || current.attempts !== 0 || current.publishedMessageId !== undefined) {
+        return { ok: false, reason: 'not_allowed', post: current } as const;
+      }
+      const post: ChannelPost = { ...current, text, photoSource, campaignId };
+      db.posts[index] = post;
+      return { ok: true, post } as const;
+    });
+  }
+
   async cancel(id: string, adminId: number): Promise<MutationResult> {
     return this.mutate((db) => {
       const index = db.posts.findIndex((post) => post.id === id);

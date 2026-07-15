@@ -1,6 +1,7 @@
 [
   {
     "contentKey": "academy-tech-20260716-ip-subnet",
+    "campaignId": "channel_academy_tech_20260716_ip_subnet",
     "scheduledAt": "2026-07-16T05:00:00.000Z",
     "slug": "2026-07-16-ip-subnet",
     "topic": "IP va subnet asoslari",
@@ -9,10 +10,11 @@
     "labels": ["NVR  192.168.1.10 /24", "KAMERA  192.168.1.20 /24", "NIQOB  255.255.255.0"],
     "diagram": "subnet",
     "altText": "NVR va IP kamera bir xil 192.168.1.0/24 tarmog‘iga ulanganini ko‘rsatuvchi original sxema.",
-    "caption": "IP kamera va NVR bir-birini ko‘rishi uchun ularning IP manzillari mos subnetda bo‘lishi kerak.\n\nMisol:\n• NVR: 192.168.1.10/24\n• Kamera: 192.168.1.20/24\n• /24 niqob: 255.255.255.0\n\nHar bir qurilmaga takrorlanmaydigan IP bering. NVR va kameraning kabel ulanishi hamda link indikatorini ham tekshiring. Masofadan kirish kerak bo‘lsa, gateway va DNS tarmoq rejasiga muvofiq sozlanadi.\n\nAmaliy videokuzatuv kursi: @wst_academy_qabul_bot"
+    "caption": "IP kamera va NVR bir-birini ko‘rishi uchun ularning IP manzillari mos subnetda bo‘lishi kerak.\n\nMisol:\n• NVR: 192.168.1.10/24\n• Kamera: 192.168.1.20/24\n• /24 niqob: 255.255.255.0\n\nHar bir qurilmaga takrorlanmaydigan IP bering. NVR va kameraning kabel ulanishi hamda link indikatorini ham tekshiring. Masofadan kirish kerak bo‘lsa, gateway va DNS tarmoq rejasiga muvofiq sozlanadi.\n\nSavol yoki kursga yozilish: https://t.me/wst_academy_qabul_bot?start=channel_academy_tech_20260716_ip_subnet"
   },
   {
     "contentKey": "academy-tech-20260717-poe-wiring",
+    "campaignId": "channel_academy_tech_20260717_poe_wiring",
     "scheduledAt": "2026-07-17T05:00:00.000Z",
     "slug": "2026-07-17-poe-wiring",
     "topic": "PoE ulanishi",
@@ -21,10 +23,11 @@
     "labels": ["PoE SWITCH", "CAT5e / CAT6", "IP KAMERA"],
     "diagram": "poe",
     "altText": "PoE switchdan Ethernet kabeli orqali IP kameraga ma’lumot va quvvat uzatilishini ko‘rsatuvchi original sxema.",
-    "caption": "PoE ulanishida mos switch yoki injector IP kameraga Ethernet kabeli orqali ma’lumot va quvvat uzatadi.\n\nTekshiruv tartibi:\n1. Kamera va PoE manbasi standartlari mosligini tekshiring.\n2. RJ45 uchlarini bir xil sxemada va sifatli siqing.\n3. Kabel tester bilan tomirlar ketma-ketligini tekshiring.\n4. Switchdagi PoE budjeti barcha kameralar uchun yetarliligini hisoblang.\n5. Port link va kamera ishga tushishini kuzating.\n\nNoma’lum passive PoE manbasini mosligi tasdiqlanmagan qurilmaga ulamang.\n\nAmaliy videokuzatuv kursi: @wst_academy_qabul_bot"
+    "caption": "PoE ulanishida mos switch yoki injector IP kameraga Ethernet kabeli orqali ma’lumot va quvvat uzatadi.\n\nTekshiruv tartibi:\n1. Kamera va PoE manbasi standartlari mosligini tekshiring.\n2. RJ45 uchlarini bir xil sxemada va sifatli siqing.\n3. Kabel tester bilan tomirlar ketma-ketligini tekshiring.\n4. Switchdagi PoE budjeti barcha kameralar uchun yetarliligini hisoblang.\n5. Port link va kamera ishga tushishini kuzating.\n\nNoma’lum passive PoE manbasini mosligi tasdiqlanmagan qurilmaga ulamang.\n\nSavol yoki kursga yozilish: https://t.me/wst_academy_qabul_bot?start=channel_academy_tech_20260717_poe_wiring"
   },
   {
     "contentKey": "academy-tech-20260718-nvr-password",
+    "campaignId": "channel_academy_tech_20260718_nvr_password",
     "scheduledAt": "2026-07-18T05:00:00.000Z",
     "slug": "2026-07-18-nvr-password",
     "topic": "NVR parol xavfsizligi",
@@ -33,10 +36,11 @@
     "labels": ["NOYOB PAROL", "ADMINNI CHEKLANG", "TIKLASHNI TEKSHIRING"],
     "diagram": "password",
     "altText": "NVR xavfsizligi uchun noyob parol, cheklangan admin va tiklash ma’lumotlarini ifodalovchi original sxema.",
-    "caption": "NVR ishga tushirilganda standart yoki boshqa obyektlarda ishlatilgan parolni qoldirmang.\n\nXavfsiz sozlash:\n• kamida 12 belgili noyob parol yarating;\n• parolni messenjer yoki ochiq jadvalda saqlamang;\n• kundalik ko‘rish uchun alohida, cheklangan foydalanuvchi oching;\n• qurilma qo‘llasa, tiklash e-maili yoki recovery ma’lumotini tekshiring;\n• firmware yangilanishi va vaqt sozlamasini ishlab chiqaruvchi yo‘riqnomasi bo‘yicha tekshiring.\n\nParolni xavfsiz password manager’da saqlash maqbul.\n\nAmaliy videokuzatuv kursi: @wst_academy_qabul_bot"
+    "caption": "NVR ishga tushirilganda standart yoki boshqa obyektlarda ishlatilgan parolni qoldirmang.\n\nXavfsiz sozlash:\n• kamida 12 belgili noyob parol yarating;\n• parolni messenjer yoki ochiq jadvalda saqlamang;\n• kundalik ko‘rish uchun alohida, cheklangan foydalanuvchi oching;\n• qurilma qo‘llasa, tiklash e-maili yoki recovery ma’lumotini tekshiring;\n• firmware yangilanishi va vaqt sozlamasini ishlab chiqaruvchi yo‘riqnomasi bo‘yicha tekshiring.\n\nParolni xavfsiz password manager’da saqlash maqbul.\n\nSavol yoki kursga yozilish: https://t.me/wst_academy_qabul_bot?start=channel_academy_tech_20260718_nvr_password"
   },
   {
     "contentKey": "academy-tech-20260719-storage",
+    "campaignId": "channel_academy_tech_20260719_storage",
     "scheduledAt": "2026-07-19T05:00:00.000Z",
     "slug": "2026-07-19-storage",
     "topic": "Arxiv hajmini hisoblash",
@@ -45,10 +49,11 @@
     "labels": ["8 KAMERA", "4 Mbps", "14 KUN ≈ 4.84 TB"],
     "diagram": "storage",
     "altText": "8 kamera, 4 Mbps bitrate va 14 kun uchun taxminiy 4.84 TB arxiv hisobini ko‘rsatuvchi original sxema.",
-    "caption": "Doimiy yozuv uchun soddalashtirilgan hisob:\n\nHajm (TB) ≈ kamera soni × bitrate (Mbps) × 86 400 × kun ÷ 8 ÷ 1 000 000.\n\nMisol: 8 kamera × 4 Mbps × 14 kun ≈ 4.84 TB.\n\nBu nazariy baho. Real hajm kodek, kadr tezligi, sahnadagi harakat, VBR/CBR, audio, event recording va disk xizmat ma’lumotlariga qarab o‘zgaradi. Disk tanlashda NVR qo‘llaydigan maksimal sig‘im va disk sonini qurilma hujjatidan tekshiring.\n\nBepul calculator va amaliy kurs: @wst_academy_qabul_bot"
+    "caption": "Doimiy yozuv uchun soddalashtirilgan hisob:\n\nHajm (TB) ≈ kamera soni × bitrate (Mbps) × 86 400 × kun ÷ 8 ÷ 1 000 000.\n\nMisol: 8 kamera × 4 Mbps × 14 kun ≈ 4.84 TB.\n\nBu nazariy baho. Real hajm kodek, kadr tezligi, sahnadagi harakat, VBR/CBR, audio, event recording va disk xizmat ma’lumotlariga qarab o‘zgaradi. Disk tanlashda NVR qo‘llaydigan maksimal sig‘im va disk sonini qurilma hujjatidan tekshiring.\n\nBepul calculator yoki kursga yozilish: https://t.me/wst_academy_qabul_bot?start=channel_academy_tech_20260719_storage"
   },
   {
     "contentKey": "academy-tech-20260720-fault-diagnosis",
+    "campaignId": "channel_academy_tech_20260720_fault_diagnosis",
     "scheduledAt": "2026-07-20T05:00:00.000Z",
     "slug": "2026-07-20-fault-diagnosis",
     "topic": "Nosozlik diagnostikasi",
@@ -57,6 +62,6 @@
     "labels": ["1  QUVVAT", "2  LINK", "3  IP", "4  PAROL", "5  PROTOKOL"],
     "diagram": "diagnosis",
     "altText": "Kamera offline bo‘lganda quvvatdan protokolga qadar besh bosqichli tekshiruvni ko‘rsatuvchi original sxema.",
-    "caption": "Kamera NVR’da “Offline” ko‘rinsa, sozlamalarni tasodifiy o‘zgartirmang. Muammoni qatlamma-qatlam tekshiring:\n\n1. Quvvat yoki PoE port holati.\n2. Kabel, RJ45 va link indikatori.\n3. Kamera IP manzili, subnet va IP takrorlanishi.\n4. Kamera paroli va NVRga kiritilgan credential.\n5. Qurilmalar qo‘llaydigan protokol va portlar.\n\nHar bosqich natijasini yozib boring. Shu tartib nosoz qismni tezroq ajratishga yordam beradi.\n\nAmaliy videokuzatuv kursi: @wst_academy_qabul_bot"
+    "caption": "Kamera NVR’da “Offline” ko‘rinsa, sozlamalarni tasodifiy o‘zgartirmang. Muammoni qatlamma-qatlam tekshiring:\n\n1. Quvvat yoki PoE port holati.\n2. Kabel, RJ45 va link indikatori.\n3. Kamera IP manzili, subnet va IP takrorlanishi.\n4. Kamera paroli va NVRga kiritilgan credential.\n5. Qurilmalar qo‘llaydigan protokol va portlar.\n\nHar bosqich natijasini yozib boring. Shu tartib nosoz qismni tezroq ajratishga yordam beradi.\n\nSavol yoki kursga yozilish: https://t.me/wst_academy_qabul_bot?start=channel_academy_tech_20260720_fault_diagnosis"
   }
 ]

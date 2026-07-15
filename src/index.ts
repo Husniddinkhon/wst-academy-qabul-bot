@@ -13,7 +13,7 @@ import { startDailyReport } from './dailyReport.js';
 import { PostgresFollowUpStore, PostgresLeadStore, PostgresStorage } from './postgres.js';
 import { JsonChannelPostStore } from './channelPosts.js';
 import { BACK_BUTTON, CALCULATOR_BUTTON, LESSON_BUTTON, MENU_BUTTON, NEXT_BUTTON, QUIZ, QUIZ_BUTTON, lessonKeyboard, lessonText, quizKeyboard, quizText, startCalculator, startLesson, startQuiz, storageTerabytes, validateCalculatorValue } from './learning.js';
-import { parseStartAttribution, resetSessionForStart } from './startFlow.js';
+import { explicitLeadSource, parseStartAttribution, resetSessionForStart } from './startFlow.js';
 import { classifyProductLead, getProductSalesAnswer, isProductSalesQuestion, productLeadReason, UNV_CAMPAIGN_ID } from './productSales.js';
 import { isPermittedSalesConversation, persistSalesConversation } from './salesConversation.js';
 import { startChannelScheduler } from './channelScheduler.js';
@@ -45,7 +45,7 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
     goal: '',
     paymentOption: '',
     status: 'CallRequested',
-    source: ctx.session.source === 'telegram_ads' ? 'telegram_ads' : 'call_request',
+    source: explicitLeadSource(ctx.session.source, 'call_request'),
     campaignId: ctx.session.campaignId,
     intent: 'call request',
     lastMessage: message,
@@ -421,19 +421,6 @@ bootstrap().catch((error) => {
   console.error('Failed to start bot:', error);
   process.exit(1);
 });
-
-function parseTracking(text: string | undefined): { source: LeadSource; campaignId?: string } {
-  const param = text?.split(/\s+/)[1];
-  if (param === 'ads' || param?.startsWith('ads_') || param?.startsWith('telegram_ads')) {
-    return { source: 'telegram_ads', campaignId: param === 'ads' ? 'legacy' : param };
-  }
-  if (param === 'channel') return { source: 'channel' };
-  if (param === 'organic') return { source: 'organic' };
-  if (param === 'registration') return { source: 'registration' };
-  if (param === 'ai_chat') return { source: 'ai_chat' };
-  if (param === 'call_request') return { source: 'call_request' };
-  return { source: 'unknown' };
-}
 
 function inferIntent(message: string): string {
   if (/narx|qancha|to['‘’`]?lov|tolov/i.test(message)) return 'price';

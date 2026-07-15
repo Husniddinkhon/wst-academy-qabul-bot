@@ -108,6 +108,36 @@ test('cancelled and unreviewed draft posts are never auto-published', async () =
   } finally { await cleanup(); }
 });
 
+test('future tracked content refresh preserves approval, schedule and zero-send state', async () => {
+  const { store, cleanup } = await fixture();
+  try {
+    const draft = await store.createFromSource('Old reviewed CTA', { kind: 'local_path', value: 'series.png' }, 10, 'academy-tech-1');
+    const scheduled = await store.schedule(draft.id, '2026-07-20T05:00:00.000Z', 20);
+    assert.equal(scheduled.ok, true);
+    const refreshed = await store.refreshScheduledContent(
+      'academy-tech-1', '2026-07-20T05:00:00.000Z', 'New tracked CTA',
+      { kind: 'local_path', value: 'series.png' }, 'channel_academy_tech_1',
+    );
+    assert.equal(refreshed.ok, true);
+    if (!refreshed.ok) return;
+    assert.equal(refreshed.post.status, 'Scheduled');
+    assert.equal(refreshed.post.scheduledAt, '2026-07-20T05:00:00.000Z');
+    assert.equal(refreshed.post.approvedBy, 20);
+    assert.equal(refreshed.post.attempts, 0);
+    assert.equal(refreshed.post.publishedMessageId, undefined);
+    assert.equal(refreshed.post.campaignId, 'channel_academy_tech_1');
+
+    const claim = await store.claimNextDue(new Date('2026-07-20T05:01:00.000Z'));
+    assert.equal(claim.ok, true);
+    const blocked = await store.refreshScheduledContent(
+      'academy-tech-1', '2026-07-20T05:00:00.000Z', 'Unsafe edit',
+      { kind: 'local_path', value: 'series.png' }, 'channel_other',
+    );
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.reason, 'not_allowed');
+  } finally { await cleanup(); }
+});
+
 test('actionable Failed reconciliation still alerts when the scheduler run itself throws', async () => {
   const { store, cleanup } = await fixture();
   const alertDirectory = await mkdtemp(path.join(tmpdir(), 'scheduler-alert-'));

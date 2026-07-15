@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { CALCULATOR_BUTTON, LESSONS, LESSON_BUTTON, QUIZ, QUIZ_BUTTON, storageTerabytes, validateCalculatorValue } from '../src/learning.js';
-import { parseStartAttribution, resetSessionForStart } from '../src/startFlow.js';
+import { explicitLeadSource, parseStartAttribution, resetSessionForStart } from '../src/startFlow.js';
 import { getTruthfulFallbackAnswer } from '../src/aiAgent.js';
 import { mainMenu, markRegistrationConsent, startInlineMenu } from '../src/registration.js';
 import type { BotSession } from '../src/types.js';
@@ -12,6 +12,16 @@ test('ad start attribution contains no PII and does not create storage side effe
   const attribution = parseStartAttribution('/start ads_campaign_a');
   assert.deepEqual(attribution, { source: 'telegram_ads', campaignId: 'ads_campaign_a' });
   assert.deepEqual(Object.keys(attribution).sort(), ['campaignId', 'source']);
+});
+
+test('bounded channel deep links preserve unique campaign attribution', () => {
+  assert.deepEqual(parseStartAttribution('/start channel_academy_tech_20260716_ip_subnet'), {
+    source: 'channel', campaignId: 'channel_academy_tech_20260716_ip_subnet',
+  });
+  assert.deepEqual(parseStartAttribution(`/start channel_${'x'.repeat(64)}`), { source: 'unknown' });
+  assert.deepEqual(parseStartAttribution('/start channel_bad.payload'), { source: 'unknown' });
+  assert.equal(explicitLeadSource('channel', 'call_request'), 'channel');
+  assert.equal(explicitLeadSource('unknown', 'call_request'), 'call_request');
 });
 
 test('start reset escapes stale wizard and learning state', () => {

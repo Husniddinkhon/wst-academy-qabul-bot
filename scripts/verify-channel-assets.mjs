@@ -21,7 +21,9 @@ for (const asset of manifest.assets) {
   if (signature !== '89504e470d0a1a0a') throw new Error(`${asset.png}: not a PNG.`);
   if (width !== 1080 || height !== 1080) throw new Error(`${asset.png}: expected 1080x1080, got ${width}x${height}.`);
   if (hash !== asset.sha256 || data.length !== asset.bytes) throw new Error(`${asset.png}: checksum or size mismatch.`);
-  if (!asset.caption.endsWith('@wst_academy_qabul_bot') || asset.caption.length > 1024) throw new Error(`${asset.png}: invalid Telegram caption.`);
+  const expectedCampaignId = `channel_${asset.contentKey.replaceAll('-', '_')}`;
+  const expectedDeepLink = `https://t.me/wst_academy_qabul_bot?start=${expectedCampaignId}`;
+  if (asset.campaignId !== expectedCampaignId || !asset.caption.endsWith(expectedDeepLink) || asset.caption.length > 1024) throw new Error(`${asset.png}: invalid tracked Telegram caption.`);
   if (!asset.altText || asset.altText.length < 40) throw new Error(`${asset.png}: accessibility description missing.`);
   if (asset.sourceLedger?.externalImagery !== false || asset.sourceLedger?.manufacturerAssets !== false) throw new Error(`${asset.png}: source ledger is not original-only.`);
   for (const requiredNode of ['>WST</text>', '>ACADEMY</text>', '>@wst_academy_qabul_bot</text>', '>AMALIY BILIM • REAL USKUNA</text>']) {
