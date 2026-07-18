@@ -14,7 +14,8 @@
     "content:set-avatar": "tsx scripts/set-channel-avatar.ts",
     "pm2:audit-env": "node scripts/audit-pm2-env.mjs",
     "ops:alert-dry-run": "node scripts/notify-systemd-failure.mjs --dry-run wst-academy-health.service",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "preflight": "node scripts/preflight-startup.mjs"
   },
   "keywords": [
     "telegram",
