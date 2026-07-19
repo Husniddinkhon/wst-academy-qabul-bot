@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, readFile, rename, rmdir, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, rmdir, stat } from 'node:fs/promises';
+import { atomicWriteJson, readJson } from './safeJson.js';
 import path from 'node:path';
 import type { JsonChannelPostStore } from './channelPosts.js';
 import type { ChannelSender } from './channelPublisher.js';
@@ -172,24 +173,12 @@ export class JsonOperationalAlertStore {
   }
 
   private async read(): Promise<AlertDatabase> {
-    try {
-      const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as Partial<AlertDatabase>;
-      return {
-        records: parsed.records && typeof parsed.records === 'object' ? parsed.records : {},
-        groups: parsed.groups && typeof parsed.groups === 'object' ? parsed.groups : {},
-      };
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { records: {}, groups: {} };
-      throw error;
-    }
+    const parsed = await readJson<Partial<AlertDatabase>>(this.filePath, {});
+    return { records: parsed.records && typeof parsed.records === 'object' ? parsed.records : {}, groups: parsed.groups && typeof parsed.groups === 'object' ? parsed.groups : {} };
   }
 
-  private async write(db: AlertDatabase): Promise<void> {
-    const temporaryPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(db, null, 2)}\n`, 'utf8');
-    await chmod(temporaryPath, 0o600);
-    await rename(temporaryPath, this.filePath);
-  }
+  private async write(db: AlertDatabase): Promise<void> { await atomicWriteJson(this.filePath, db); }
+
 }
 
 export async function deliverOperationalAlert(request: OperationalAlertRequest): Promise<OperationalAlertResult> {
