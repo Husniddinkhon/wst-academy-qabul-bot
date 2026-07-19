@@ -20,7 +20,7 @@ test('PM2 drops inherited server environment and injects only non-secret app met
   assert.equal(ecosystem.apps.length, 1);
   const app = ecosystem.apps[0];
   assert.equal(app.name, 'wst-academy-qabul-bot');
-  assert.equal(app.script, 'dist/index.js');
+  assert.equal(app.script, 'scripts/preflight-startup.mjs');
   assert.equal(app.interpreter, '/usr/bin/node');
   assert.equal(app.autorestart, true);
   assert.equal(app.merge_logs, true);
