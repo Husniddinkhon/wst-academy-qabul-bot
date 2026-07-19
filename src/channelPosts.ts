@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
+
 
 export type ChannelPostStatus = 'Draft' | 'Scheduled' | 'Publishing' | 'Published' | 'Failed' | 'Cancelled';
 
@@ -153,11 +154,11 @@ export class JsonChannelPostStore {
   private async mutate<T>(operation: (db: ChannelPostDatabase) => T): Promise<T> {
     let resolveResult!: (value: T) => void; let rejectResult!: (reason?: unknown) => void;
     const result = new Promise<T>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
-    const run = async () => { try { const db = await this.read(); const before = JSON.stringify(db); const value = operation(db); if (JSON.stringify(db) !== before) await this.write(db); resolveResult(value); } catch (error) { rejectResult(error); } };
+    const run = async () => { try { const value = await withFileLock(this.filePath, async () => { const db = await this.read(); const before = JSON.stringify(db); const result = operation(db); if (JSON.stringify(db) !== before) await this.write(db); return result; }); resolveResult(value); } catch (error) { rejectResult(error); } };
     this.mutationQueue = this.mutationQueue.then(run, run); await this.mutationQueue; return result;
   }
-  private async read(): Promise<ChannelPostDatabase> { try { const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as ChannelPostDatabase; return { posts: Array.isArray(parsed.posts) ? parsed.posts.map(normalizePost) : [] }; } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { posts: [] }; throw error; } }
-  private async write(db: ChannelPostDatabase): Promise<void> { await mkdir(path.dirname(this.filePath), { recursive: true }); const temporaryPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`; await writeFile(temporaryPath, `${JSON.stringify(db, null, 2)}\n`, 'utf8'); await rename(temporaryPath, this.filePath); }
+  private async read(): Promise<ChannelPostDatabase> { const parsed = await readJson<ChannelPostDatabase>(this.filePath, { posts: [] }); return { posts: Array.isArray(parsed.posts) ? parsed.posts.map(normalizePost) : [] }; }
+  private async write(db: ChannelPostDatabase): Promise<void> { await atomicWriteJson(this.filePath, db); }
 }
 
 function claim(db: ChannelPostDatabase, index: number, current: ChannelPost, publisherId: number, startedAt: Date): { ok: true; post: ChannelPost; attemptId: string } {

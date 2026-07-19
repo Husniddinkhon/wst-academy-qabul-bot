@@ -1,5 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
 import type { FollowUpState, Lead, LeadStatus, LeadWebhookEvent } from './types.js';
 
 interface LeadDatabase { leads: Lead[]; }
@@ -16,6 +16,7 @@ export class JsonLeadStore {
   constructor(private readonly filePath: string) {}
 
   async upsert(lead: Lead): Promise<LeadUpsertResult> {
+    return withFileLock(this.filePath, async () => {
     const db = await this.readDatabase();
     const index = db.leads.findIndex((item) => item.telegramId === lead.telegramId);
     if (index === -1) {
@@ -29,12 +30,14 @@ export class JsonLeadStore {
     db.leads[index] = merged;
     await this.writeDatabase(db);
     return { lead: merged, created: false, hotEscalated: lead.aiLeadScore === 'HOT' && existing.aiLeadScore !== 'HOT' };
+    });
   }
 
   async add(lead: Lead): Promise<void> { await this.upsert(lead); }
   async getByTelegramId(telegramId: number): Promise<Lead | undefined> { return (await this.all()).find((lead) => lead.telegramId === telegramId); }
 
   async updateByTelegramId(telegramId: number, patch: Partial<Lead>): Promise<Lead | undefined> {
+    return withFileLock(this.filePath, async () => {
     const db = await this.readDatabase();
     const index = db.leads.findIndex((lead) => lead.telegramId === telegramId);
     if (index === -1) return undefined;
@@ -43,6 +46,7 @@ export class JsonLeadStore {
     db.leads[index] = updated;
     await this.writeDatabase(db);
     return updated;
+    });
   }
 
   async all(): Promise<Lead[]> { const db = await this.readDatabase(); return db.leads.map(normalizeLead).sort((a, b) => b.createdAt.localeCompare(a.createdAt)); }
@@ -61,24 +65,24 @@ export class JsonLeadStore {
     return [headers.join(','), ...exportLeads.map((lead) => headers.map((h) => csvEscape(String(lead[h] ?? ''))).join(','))].join('\n');
   }
   async getFunnelEventMetrics(_from: Date, _toExclusive: Date): Promise<FunnelEventMetrics> { return { available: false, leadCreationsTracked: 0, hotEscalations: 0, registrations: 0 }; }
-  private async readDatabase(): Promise<LeadDatabase> { try { const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as LeadDatabase; return { leads: Array.isArray(parsed.leads) ? parsed.leads : [] }; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { leads: [] }; throw e; } }
+  private async readDatabase(): Promise<LeadDatabase> { const parsed = await readJson<LeadDatabase>(this.filePath, { leads: [] }); return { leads: Array.isArray(parsed.leads) ? parsed.leads : [] }; }
   private async writeDatabase(db: LeadDatabase): Promise<void> { await atomicWriteJson(this.filePath, db); }
 }
 
 export class JsonWebhookFailureStore {
   constructor(private readonly filePath: string) {}
-  async add(payload: Omit<FailedWebhookPayload, 'failedAt' | 'attempts'>): Promise<void> { const db = await this.read(); db.payloads.push({ ...payload, failedAt: new Date().toISOString(), attempts: 1 }); await atomicWriteJson(this.filePath, db); }
+  async add(payload: Omit<FailedWebhookPayload, 'failedAt' | 'attempts'>): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); db.payloads.push({ ...payload, failedAt: new Date().toISOString(), attempts: 1 }); await atomicWriteJson(this.filePath, db); }); }
   async all(): Promise<FailedWebhookPayload[]> { return (await this.read()).payloads; }
-  async replace(payloads: FailedWebhookPayload[]): Promise<void> { await atomicWriteJson(this.filePath, { payloads }); }
-  private async read(): Promise<FailedWebhookDatabase> { try { const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as FailedWebhookDatabase; return { payloads: Array.isArray(parsed.payloads) ? parsed.payloads : [] }; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { payloads: [] }; throw e; } }
+  async replace(payloads: FailedWebhookPayload[]): Promise<void> { await withFileLock(this.filePath, async () => atomicWriteJson(this.filePath, { payloads })); }
+  private async read(): Promise<FailedWebhookDatabase> { const parsed = await readJson<FailedWebhookDatabase>(this.filePath, { payloads: [] }); return { payloads: Array.isArray(parsed.payloads) ? parsed.payloads : [] }; }
 }
 
 export class JsonFollowUpStore {
   constructor(private readonly filePath: string) {}
-  async ensure(state: FollowUpState): Promise<void> { const db = await this.read(); if (db.followups.some((f) => f.telegramId === state.telegramId)) return; db.followups.push(state); await atomicWriteJson(this.filePath, db); }
-  async upsert(state: FollowUpState): Promise<void> { const db = await this.read(); const i = db.followups.findIndex((f) => f.telegramId === state.telegramId); if (i === -1) db.followups.push(state); else db.followups[i] = { ...db.followups[i], ...state }; await atomicWriteJson(this.filePath, db); }
+  async ensure(state: FollowUpState): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); if (db.followups.some((f) => f.telegramId === state.telegramId)) return; db.followups.push(state); await atomicWriteJson(this.filePath, db); }); }
+  async upsert(state: FollowUpState): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); const i = db.followups.findIndex((f) => f.telegramId === state.telegramId); if (i === -1) db.followups.push(state); else db.followups[i] = { ...db.followups[i], ...state }; await atomicWriteJson(this.filePath, db); }); }
   async all(): Promise<FollowUpState[]> { return (await this.read()).followups; }
-  private async read(): Promise<FollowUpDatabase> { try { const parsed = JSON.parse(await readFile(this.filePath, 'utf8')) as FollowUpDatabase; return { followups: Array.isArray(parsed.followups) ? parsed.followups : [] }; } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { followups: [] }; throw e; } }
+  private async read(): Promise<FollowUpDatabase> { const parsed = await readJson<FollowUpDatabase>(this.filePath, { followups: [] }); return { followups: Array.isArray(parsed.followups) ? parsed.followups : [] }; }
 }
 
 function normalizeLead(lead: Lead): Lead { return { ...lead, updatedAt: lead.updatedAt ?? lead.createdAt, city: lead.city ?? (lead as unknown as { district?: string }).district ?? '', workStatus: lead.workStatus ?? '', goal: lead.goal ?? '', paymentOption: lead.paymentOption ?? '', status: normalizeStatus(lead.status), source: lead.source ?? 'unknown', campaignId: lead.campaignId ?? '', studentStatus: lead.studentStatus ?? 'NotEnrolled', agentActionCount: lead.agentActionCount ?? 0, lastAgentAction: lead.lastAgentAction ?? '', lastAgentAt: lead.lastAgentAt ?? '', intent: lead.intent ?? '', lastMessage: lead.lastMessage ?? lead.notes ?? '', messages: lead.messages ?? [], operatorNote: lead.operatorNote ?? '', nextFollowUp: lead.nextFollowUp ?? '', paymentStatus: lead.paymentStatus ?? '' }; }
@@ -108,5 +112,4 @@ export function mergeLeadRecords(existingLead: Lead, incomingLead: Lead): Lead {
   });
 }
 function normalizeStatus(status: string): LeadStatus { if (status === 'new' || status === 'notified') return 'New'; return (status as LeadStatus) ?? 'New'; }
-async function atomicWriteJson(filePath: string, data: unknown): Promise<void> { await mkdir(path.dirname(filePath), { recursive: true }); const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`; await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8'); await rename(tmp, filePath); }
 function csvEscape(value: string): string { if (!/[",\n\r]/.test(value)) return value; return `"${value.replaceAll('"', '""')}"`; }
