@@ -1,9 +1,11 @@
 import dotenv from 'dotenv';
+import path from 'node:path';
 import type { AiConfig } from './aiAgent.js';
 
-dotenv.config();
+if (process.env.NODE_ENV !== 'staging') dotenv.config();
 
 export interface AppConfig {
+  environment: 'development' | 'staging' | 'production';
   botToken: string;
   adminIds: number[];
   leadsFile: string;
@@ -47,6 +49,9 @@ export interface AppConfig {
   channelAssetRoot: string;
   channelImageHosts: string[];
   isProduction: boolean;
+  stagingDataDir?: string;
+  stagingMediaDir?: string;
+  stagingBackupDir?: string;
   ai: AiConfig;
   databaseUrl?: string;
   opsAggregatePort?: number;
@@ -96,7 +101,25 @@ function parseOptionalChatId(value: string | undefined): number | undefined {
   return parsed;
 }
 
+function parseEnvironment(value: string | undefined): AppConfig['environment'] {
+  const normalized = value?.trim().toLowerCase() || 'development';
+  if (!['development', 'staging', 'production'].includes(normalized)) {
+    throw new Error('NODE_ENV must be development, staging or production.');
+  }
+  return normalized as AppConfig['environment'];
+}
+
+function requireStagingPath(name: string, value: string | undefined, expected: string): string {
+  if (value !== expected) throw new Error(`${name} must be ${expected} in staging.`);
+  const repoRoot = path.resolve(process.cwd());
+  const resolved = path.resolve(repoRoot, value);
+  if (!resolved.startsWith(`${repoRoot}${path.sep}`)) throw new Error(`${name} must resolve inside the repository staging workspace.`);
+  return value;
+}
+
 export function loadConfig(): AppConfig {
+  const environment = parseEnvironment(process.env.NODE_ENV);
+  const isStaging = environment === 'staging';
   const botToken = process.env.BOT_TOKEN;
   const leadWebhookServiceId = process.env.LEAD_WEBHOOK_SERVICE_ID?.trim() || undefined;
   const leadWebhookSecret = process.env.LEAD_WEBHOOK_SECRET || undefined;
@@ -117,6 +140,30 @@ export function loadConfig(): AppConfig {
 
   if (!botToken) {
     throw new Error('BOT_TOKEN is required. Copy .env.example to .env and set your Telegram bot token.');
+  }
+  const rawChannelChatId = process.env.CHANNEL_CHAT_ID?.trim();
+  const rawAdminIds = process.env.ADMIN_IDS?.trim();
+  let stagingDataDir: string | undefined;
+  let stagingMediaDir: string | undefined;
+  let stagingBackupDir: string | undefined;
+  if (isStaging) {
+    if (!/^\d{6,}:[A-Za-z0-9_-]{20,}$/.test(botToken)) throw new Error('BOT_TOKEN must be a valid staging Telegram bot token.');
+    if (!rawChannelChatId) throw new Error('CHANNEL_CHAT_ID is required in staging; no fallback is permitted.');
+    if (!/^-100\d+$/.test(rawChannelChatId)) throw new Error('CHANNEL_CHAT_ID must be a Telegram channel ID in staging.');
+    if (!rawAdminIds || !/^\d+(,\d+)*$/.test(rawAdminIds) || rawAdminIds.split(',').some((value) => !Number.isSafeInteger(Number(value)) || Number(value) <= 0)) {
+      throw new Error('ADMIN_IDS must contain one or more valid staging admin IDs.');
+    }
+    if (!Number.isSafeInteger(Number(rawChannelChatId))) throw new Error('CHANNEL_CHAT_ID must be a safe Telegram channel ID in staging.');
+    if (process.env.DATABASE_URL?.trim()) throw new Error('DATABASE_URL is prohibited in local staging precheck; use staging-local JSON state.');
+    const prohibitedTargets = ['LEAD_WEBHOOK_URL', 'LEAD_WEBHOOK_SERVICE_ID', 'LEAD_WEBHOOK_SECRET', 'ACADEMY_REPORT_BASE_URL', 'AI_API_KEY', 'AI_BASE_URL', 'AI_FALLBACK_API_KEY', 'AI_FALLBACK_BASE_URL', 'OPS_AGGREGATE_PORT', 'OPS_AGGREGATE_SERVICE_ID', 'OPS_AGGREGATE_SECRET', 'SALES_DISCUSSION_CHAT_ID'];
+    const presentTarget = prohibitedTargets.find((name) => process.env[name]?.trim());
+    if (presentTarget) throw new Error(`${presentTarget} is prohibited in the read-only staging precheck.`);
+    const forbiddenOverrides = ['LEADS_FILE', 'WEBHOOK_FAILED_FILE', 'FOLLOWUPS_FILE', 'TELEGRAM_UPDATES_FILE', 'CHANNEL_POSTS_FILE', 'OPS_ALERTS_FILE', 'CHANNEL_ASSET_ROOT'];
+    const presentOverride = forbiddenOverrides.find((name) => process.env[name]?.trim());
+    if (presentOverride) throw new Error(`${presentOverride} cannot override isolated ACADEMY_* paths in staging.`);
+    stagingDataDir = requireStagingPath('ACADEMY_DATA_DIR', process.env.ACADEMY_DATA_DIR, './.staging-data');
+    stagingMediaDir = requireStagingPath('ACADEMY_MEDIA_DIR', process.env.ACADEMY_MEDIA_DIR, './.staging-media');
+    stagingBackupDir = requireStagingPath('ACADEMY_BACKUP_DIR', process.env.ACADEMY_BACKUP_DIR, './.staging-backups');
   }
   if (Boolean(leadWebhookServiceId) !== Boolean(leadWebhookSecret)) {
     throw new Error('LEAD_WEBHOOK_SERVICE_ID and LEAD_WEBHOOK_SECRET must be configured together.');
@@ -145,27 +192,28 @@ export function loadConfig(): AppConfig {
   if (opsAggregateSecret && opsAggregateSecret.length < 32) throw new Error('OPS_AGGREGATE_SECRET must contain at least 32 characters.');
 
   return {
+    environment,
     botToken,
     adminIds: parseAdminIds(process.env.ADMIN_IDS),
-    leadsFile: process.env.LEADS_FILE ?? './data/leads.json',
+    leadsFile: isStaging ? path.join(stagingDataDir!, 'leads.json') : process.env.LEADS_FILE ?? './data/leads.json',
     leadWebhookUrl: process.env.LEAD_WEBHOOK_URL?.trim() || undefined,
     leadWebhookServiceId,
     leadWebhookSecret,
     academyReportBaseUrl,
     academyReportTimeoutMs: parseBoundedInteger('ACADEMY_REPORT_TIMEOUT_MS', process.env.ACADEMY_REPORT_TIMEOUT_MS, 5_000, 500, 15_000),
-    webhookFailedFile: process.env.WEBHOOK_FAILED_FILE ?? './data/webhook_failed.json',
+    webhookFailedFile: isStaging ? path.join(stagingDataDir!, 'webhook_failed.json') : process.env.WEBHOOK_FAILED_FILE ?? './data/webhook_failed.json',
     webhookMaxAttempts: parseBoundedInteger('WEBHOOK_MAX_ATTEMPTS', process.env.WEBHOOK_MAX_ATTEMPTS, 5, 1, 20),
     webhookRetentionMs: parseBoundedInteger('WEBHOOK_RETENTION_MS', process.env.WEBHOOK_RETENTION_MS, 604_800_000, 3_600_000, 2_592_000_000),
     webhookRetryBaseMs,
     webhookRetryMaxMs,
     webhookClaimLeaseMs: parseBoundedInteger('WEBHOOK_CLAIM_LEASE_MS', process.env.WEBHOOK_CLAIM_LEASE_MS, 600_000, 30_000, 3_600_000),
     webhookMaxManualReplays: parseBoundedInteger('WEBHOOK_MAX_MANUAL_REPLAYS', process.env.WEBHOOK_MAX_MANUAL_REPLAYS, 1, 1, 3),
-    followupsFile: process.env.FOLLOWUPS_FILE ?? './data/followups.json',
+    followupsFile: isStaging ? path.join(stagingDataDir!, 'followups.json') : process.env.FOLLOWUPS_FILE ?? './data/followups.json',
     followUpClaimLeaseMs: parseBoundedInteger('FOLLOWUP_CLAIM_LEASE_MS', process.env.FOLLOWUP_CLAIM_LEASE_MS, 300_000, 30_000, 3_600_000),
     followUpMaxAttempts: parseBoundedInteger('FOLLOWUP_MAX_ATTEMPTS', process.env.FOLLOWUP_MAX_ATTEMPTS, 3, 1, 10),
     followUpRetryBaseMs,
     followUpRetryMaxMs,
-    telegramUpdatesFile: process.env.TELEGRAM_UPDATES_FILE ?? './data/telegram_updates.json',
+    telegramUpdatesFile: isStaging ? path.join(stagingDataDir!, 'telegram_updates.json') : process.env.TELEGRAM_UPDATES_FILE ?? './data/telegram_updates.json',
     telegramUpdateLeaseMs: parseBoundedInteger('TELEGRAM_UPDATE_LEASE_MS', process.env.TELEGRAM_UPDATE_LEASE_MS, 300_000, 30_000, 3_600_000),
     telegramUpdateRetention: parseBoundedInteger('TELEGRAM_UPDATE_RETENTION', process.env.TELEGRAM_UPDATE_RETENTION, 100_000, 10_000, 1_000_000),
     dailyReportEnabled: process.env.DAILY_REPORT_ENABLED !== 'false',
@@ -174,10 +222,10 @@ export function loadConfig(): AppConfig {
     operatorPhone: process.env.OPERATOR_PHONE || '+998333011511',
     botDescription: process.env.BOT_DESCRIPTION || 'WST Academy videokuzatuv kursi: 1 oy, 12 dars, offline real uskunalarda amaliyot. Manzil: Toshkent shahri, Arnasoy ko‘chasi, 33-uy. Keyingi guruh 2026-yil 4-avgustga rejalashtirilgan; qabulga qarab 1–2 kun siljishi mumkin. Darslar 10:00–16:00 oralig‘ida, kunlar guruh talabiga qarab belgilanadi.',
     botShortDescription: process.env.BOT_SHORT_DESCRIPTION || 'WST Academy: videokuzatuv bo‘yicha 1 oy, 12 dars. Offline, real uskunalarda amaliy kurs.',
-    channelChatId: process.env.CHANNEL_CHAT_ID || '-1004297032922',
+    channelChatId: rawChannelChatId || '-1004297032922',
     salesDiscussionChatId: parseOptionalChatId(process.env.SALES_DISCUSSION_CHAT_ID),
-    channelPostsFile: process.env.CHANNEL_POSTS_FILE || './data/channel_posts.json',
-    opsAlertsFile: process.env.OPS_ALERTS_FILE || './data/ops_alerts.json',
+    channelPostsFile: isStaging ? path.join(stagingDataDir!, 'channel_posts.json') : process.env.CHANNEL_POSTS_FILE || './data/channel_posts.json',
+    opsAlertsFile: isStaging ? path.join(stagingDataDir!, 'ops_alerts.json') : process.env.OPS_ALERTS_FILE || './data/ops_alerts.json',
     channelSchedulerEnabled: process.env.CHANNEL_SCHEDULER_ENABLED !== 'false',
     channelSchedulerPollMs: parseBoundedInteger('CHANNEL_SCHEDULER_POLL_MS', process.env.CHANNEL_SCHEDULER_POLL_MS, 30_000, 5_000, 300_000),
     channelPublishStaleMs: channelClaimLeaseMs,
@@ -185,9 +233,12 @@ export function loadConfig(): AppConfig {
     channelClaimRenewMs,
     channelUncertainWindowMs: parseBoundedInteger('CHANNEL_UNCERTAIN_WINDOW_MS', process.env.CHANNEL_UNCERTAIN_WINDOW_MS, 86_400_000, 300_000, 604_800_000),
     shutdownDrainTimeoutMs: parseBoundedInteger('SHUTDOWN_DRAIN_TIMEOUT_MS', process.env.SHUTDOWN_DRAIN_TIMEOUT_MS, 30_000, 1_000, 300_000),
-    channelAssetRoot: process.env.CHANNEL_ASSET_ROOT?.trim() || './assets/channel',
+    channelAssetRoot: isStaging ? stagingMediaDir! : process.env.CHANNEL_ASSET_ROOT?.trim() || './assets/channel',
     channelImageHosts: (process.env.CHANNEL_IMAGE_HOSTS || '').split(',').map((host) => host.trim().toLowerCase()).filter(Boolean),
-    isProduction: process.env.NODE_ENV === 'production',
+    isProduction: environment === 'production',
+    stagingDataDir,
+    stagingMediaDir,
+    stagingBackupDir,
     databaseUrl: process.env.DATABASE_URL || undefined,
     opsAggregatePort: opsAggregatePortRaw ? parseBoundedInteger('OPS_AGGREGATE_PORT', opsAggregatePortRaw, 8381, 1024, 65535) : undefined,
     opsAggregateServiceId,
@@ -223,4 +274,10 @@ export function loadConfig(): AppConfig {
         : undefined,
     },
   };
+}
+
+export function runtimeEnvironmentEvent(config: Pick<AppConfig, 'environment'>): { event: 'runtime_environment'; mode: 'STAGING MODE'; production: false; isolatedState: true } | undefined {
+  return config.environment === 'staging'
+    ? { event: 'runtime_environment', mode: 'STAGING MODE', production: false, isolatedState: true }
+    : undefined;
 }

@@ -127,6 +127,9 @@ dead-letter controls are documented in
 [`docs/wave-3-publication-reconciliation.md`](docs/wave-3-publication-reconciliation.md),
 [`docs/wave-3-worker-shutdown-followups.md`](docs/wave-3-worker-shutdown-followups.md), and
 [`docs/wave-3-webhook-retry-policy.md`](docs/wave-3-webhook-retry-policy.md).
+The secret-safe Wave 3.1B staging identity and channel-permission check is documented in
+[`docs/wave-3.1b-staging-precheck.md`](docs/wave-3.1b-staging-precheck.md). Its
+`npm run staging:precheck` command never polls or sends, edits, deletes, or publishes a Telegram message.
 
 ## Deployment notes
 

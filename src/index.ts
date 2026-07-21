@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session } from 'telegraf';
-import { loadConfig } from './config.js';
+import { loadConfig, runtimeEnvironmentEvent } from './config.js';
 import { formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
 import { isAdmin, notifyCallRequestLead, notifyHotLead, notifyScoredHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
@@ -221,6 +221,8 @@ async function handleLearningText(ctx: BotContext, message: string): Promise<boo
 
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
+  const environmentEvent = runtimeEnvironmentEvent(config);
+  if (environmentEvent) console.warn(JSON.stringify(environmentEvent));
   configureLeadWebhookSigning(config.leadWebhookServiceId && config.leadWebhookSecret ? {
     serviceId: config.leadWebhookServiceId,
     secret: config.leadWebhookSecret,

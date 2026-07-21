@@ -150,3 +150,8 @@ vite.config.ts.timestamp-*
 /data/*.json.*.tmp
 !/data/.gitkeep
 /backups/
+
+# Local controlled-staging runtime (secrets are also covered by .env.* above)
+/.staging-data/
+/.staging-media/
+/.staging-backups/

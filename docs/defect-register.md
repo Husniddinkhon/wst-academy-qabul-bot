@@ -38,6 +38,12 @@ Severity uses P0 Critical, P1 High, P2 Medium, and P3 Low. Closed entries requir
 | P1-11 | Deployment rollback backs up the newly built candidate rather than the previous release | Immutable release directories or verified pre-build snapshot and atomic switch | Preserved; deployment changes deferred |
 | P1-12 | Backup/restore, off-host retention and RPO/RTO are not proven by a restore rehearsal | Checksummed manifests, encrypted off-host copy and isolated restore exercise | Preserved; production backup mutation prohibited |
 
+## Wave 3.1B staging precheck resolved locally
+
+| ID | Severity | Defect | Resolution evidence | Status |
+|---|---|---|---|---|
+| STG-01 | P1 | Staging could inherit the production-compatible channel fallback or non-isolated state targets | Explicit staging channel/admin requirements, isolated `ACADEMY_*` paths, inherited-target rejection, visible non-secret `STAGING MODE`, and read-only allowlisted Telegram preflight; `tests/config.test.ts`, `tests/stagingConfig.test.ts`, `tests/stagingTelegramPreflight.test.ts` | Resolved locally; not deployed |
+
 ## Release qualification
 
 Wave 3 completion qualifies only the local publication/follow-up/webhook reliability controls for controlled staging QA. It does not make the bot production-ready or authorize deployment. P1-06 through P1-12 remain release blockers until their own controlled repair and verification gates pass.

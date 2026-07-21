@@ -15,7 +15,8 @@
     "pm2:audit-env": "node scripts/audit-pm2-env.mjs",
     "ops:alert-dry-run": "node scripts/notify-systemd-failure.mjs --dry-run wst-academy-health.service",
     "start": "node dist/index.js",
-    "preflight": "node scripts/preflight-startup.mjs"
+    "preflight": "node scripts/preflight-startup.mjs",
+    "staging:precheck": "tsx scripts/staging-readonly-preflight.ts"
   },
   "keywords": [
     "telegram",
