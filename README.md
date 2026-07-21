@@ -112,6 +112,10 @@ Leads are stored locally in `data/leads.json` by default. You can change this pa
 
 The `data/*.json` files are ignored by Git to avoid committing personal lead data.
 
+JSON lock ownership, backup generations, recovery order, and operational guidance are documented in
+[`docs/wave-1-storage-reliability.md`](docs/wave-1-storage-reliability.md). The current security,
+durability, and workflow backlog is maintained in [`docs/defect-register.md`](docs/defect-register.md).
+
 ## Deployment notes
 
 1. Install dependencies with `npm ci`.
