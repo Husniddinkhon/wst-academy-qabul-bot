@@ -7,8 +7,8 @@ Severity uses P0 Critical, P1 High, P2 Medium, and P3 Low. Closed entries requir
 | ID | Severity | Defect | Resolution evidence | Status |
 |---|---|---|---|---|
 | W1-01 | P2 | Runtime `.bak`, lock-directory, and temporary files appeared as untracked Git changes | `.gitignore`; `tests/deploymentConfig.test.ts` | Resolved locally; not deployed |
-| W1-02 | P1 | Stale lock takeover and owner-blind release could remove a successor lock | `src/safeJson.ts`; stale/live/dead/successor lock tests | Resolved locally; not deployed |
-| W1-03 | P1 | A corrupt primary could overwrite the only good `.bak`; a missing primary ignored `.bak` | Two backup generations and recovery-order tests in `tests/safeJsonRecovery.test.ts` | Resolved locally; not deployed |
+| W1-02 | P1 | Stale lock takeover and owner-blind release could remove a successor lock | Fixed exclusive reclaim claim; live/dead/dual-reclaimer/successor tests | Resolved locally; not deployed |
+| W1-03 | P1 | A corrupt primary could overwrite the only good `.bak`; a missing primary ignored `.bak` | Parseable generations, fail-closed I/O, recovery-order, and interruption tests | Resolved locally; not deployed |
 | W1-04 | P2 | Idempotent operational-alert checks physically rewrote unchanged state every minute | Serialized change detection and no-op persistence test | Resolved locally; not deployed |
 
 ## Preserved P1 backlog for later controlled waves

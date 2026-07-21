@@ -15,7 +15,7 @@ declare module 'node:crypto' {
 }
 
 declare module 'node:fs/promises' {
-  export function mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  export function mkdir(path: string, options?: { recursive?: boolean; mode?: number } | number): Promise<void>;
   export function readFile(path: string, encoding: 'utf8'): Promise<string>;
   export function rename(oldPath: string, newPath: string): Promise<void>;
   export function writeFile(path: string, data: string, encoding: 'utf8'): Promise<void>;

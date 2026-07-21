@@ -7,10 +7,10 @@ Wave 1 changes only repository-local JSON storage primitives, runtime-artifact i
 Production primary JSON files and their recovery generations must never be copied into Git. The protected runtime set is:
 
 - `data/*.json` — authoritative primary state;
-- `data/*.json.bak` — most recent verified primary generation;
-- `data/*.json.bak.1` — preceding verified generation;
+- `data/*.json.bak` — most recent JSON-parseable primary generation;
+- `data/*.json.bak.1` — preceding JSON-parseable generation;
 - `data/*.json.lock/` — active token-owned lock directory;
-- `data/*.json.lock/.reclaim-*` — short-lived tokenized stale-reclamation marker;
+- `data/*.json.lock/.reclaim` — fixed, exclusively created stale-reclamation claim;
 - `data/*.json.*.tmp` — uncommitted durable-write candidates.
 
 ## Token-owned lock protocol
@@ -19,8 +19,8 @@ Each writer acquires `<state>.lock/` with an atomic directory creation. The dire
 
 - A writer releases a lock only when the on-disk token still matches its token.
 - A lock older than five minutes is not reclaimed while its recorded PID is alive.
-- A reclaimer creates a unique marker inside the observed lock directory and then rechecks ownership before removal.
-- Release detects reclamation markers and cannot race a stale takeover; abandoned markers are cleaned only after the old owner record is gone.
+- A reclaimer exclusively creates one fixed claim inside the observed lock directory, verifies its token, and rechecks the owner generation before removal.
+- A second reclaimer cannot pass the same claim; release cannot race a claim targeting its generation, and a claim targeting an older generation cannot delete a successor owner.
 - An old writer cannot remove a successor's lock.
 - A PID-reuse false positive safely blocks reclamation instead of permitting concurrent writers.
 
@@ -49,6 +49,8 @@ Recovery read order is:
 4. empty/default state only when the primary and all backup generations are absent.
 
 If the primary exists but no parseable generation exists, startup or the calling operation fails closed with a storage-read error.
+
+Only `ENOENT` is classified as missing and only a JSON parse failure is classified as malformed. Permission, sharing, device, descriptor-exhaustion, and other filesystem errors propagate and stop recovery or writes before any generation is rotated or replaced. "Parseable" in this wave does not assert application-schema validation.
 
 ## Operational-alert no-op behavior
 
