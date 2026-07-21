@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, rmdir, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
-const LOCK_TIMEOUT_MS = 15_000;
+const LOCK_TIMEOUT_MS = 60_000;
 const LOCK_STALE_MS = 5 * 60_000;
 const LOCK_RETRY_MS = 50;
 

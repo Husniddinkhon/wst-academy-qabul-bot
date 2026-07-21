@@ -24,7 +24,7 @@ Each writer acquires `<state>.lock/` with an atomic directory creation. The dire
 - An old writer cannot remove a successor's lock.
 - A PID-reuse false positive safely blocks reclamation instead of permitting concurrent writers.
 
-Lock timeout remains a fail-closed condition. Operators must not manually remove a lock merely because it is old; process ownership must be established first.
+Lock acquisition has a bounded 60-second default and remains a fail-closed condition. Operators must not manually remove a lock merely because it is old; process ownership must be established first.
 
 ## Generation-safe write protocol
 

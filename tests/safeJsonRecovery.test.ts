@@ -11,7 +11,7 @@ import { atomicWriteJson, readJson, withFileLock } from '../src/safeJson.js';
 async function fixture(prefix = 'safe-json-') {
   const directory = await mkdtemp(path.join(tmpdir(), prefix));
   const file = path.join(directory, 'state.json');
-  return { directory, file, cleanup: () => rm(directory, { recursive: true, force: true }) };
+  return { directory, file, cleanup: () => rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }) };
 }
 
 async function json(file: string): Promise<Record<string, unknown>> {
