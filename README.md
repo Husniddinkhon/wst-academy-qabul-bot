@@ -122,6 +122,11 @@ JSON lock ownership, backup generations, recovery order, and operational guidanc
 durability, and workflow backlog is maintained in [`docs/defect-register.md`](docs/defect-register.md).
 Wave 2 replay, crash, and uncertain-outcome behavior is documented in
 [`docs/wave-2-telegram-idempotency.md`](docs/wave-2-telegram-idempotency.md).
+Wave 3 publication reconciliation, shutdown, follow-up claims, and webhook
+dead-letter controls are documented in
+[`docs/wave-3-publication-reconciliation.md`](docs/wave-3-publication-reconciliation.md),
+[`docs/wave-3-worker-shutdown-followups.md`](docs/wave-3-worker-shutdown-followups.md), and
+[`docs/wave-3-webhook-retry-policy.md`](docs/wave-3-webhook-retry-policy.md).
 
 ## Deployment notes
 
@@ -172,7 +177,7 @@ reload once from the clean command above.
 
 ### Durable operational failure alerts
 
-Channel posts that enter `Failed` are reconciled by the qabul scheduler. Only
+Channel posts that enter `Failed` or `Uncertain` are reconciled by the qabul scheduler. Only
 failures from the last 24 hours are actionable. Each admin recipient is tracked
 independently by a SHA-256 fingerprint: Telegram success is persisted before a
 recipient is considered delivered, failed delivery uses bounded exponential

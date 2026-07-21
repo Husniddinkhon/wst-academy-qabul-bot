@@ -116,3 +116,24 @@ test('channel alerts are actionable, deduplicated per failure attempt, and ignor
     assert.doesNotMatch(messages[0], /raw secret|old failed/i);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test('recent Uncertain publication emits one privacy-safe manual-review alert', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'channel-uncertain-alert-'));
+  try {
+    const posts = new JsonChannelPostStore(path.join(directory, 'posts.json'));
+    const alerts = new JsonOperationalAlertStore(path.join(directory, 'alerts.json'));
+    const post = await posts.create('Approved content hidden from alert logs', undefined, 10);
+    const claim = await posts.claimForPublishing(post.id, 20);
+    assert.equal(claim.ok, true);
+    if (!claim.ok) return;
+    await posts.markSendStarted(post.id, claim.attemptId, claim.claimToken, '-100-private', 'd'.repeat(64));
+    await posts.markUncertain(post.id, claim.attemptId, 'raw connection detail must stay private', claim.claimToken);
+    const messages: string[] = [];
+    const sender = { sendMessage: async (_chatId: string | number, text: string) => { messages.push(text); return { message_id: 1 }; }, sendPhoto: async () => ({ message_id: 2 }) };
+    await alertActionableChannelFailures(posts, sender, [77], alerts);
+    await alertActionableChannelFailures(posts, sender, [77], alerts);
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /Uncertain\/manual review/);
+    assert.doesNotMatch(messages[0], /raw connection detail|100-private|Approved content/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

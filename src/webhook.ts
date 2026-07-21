@@ -157,7 +157,16 @@ export async function retryFailedWebhooks(webhookUrl: string | undefined, failur
       await failureStore.finishRetry(item, { sent: false, error: safeError(error), outcomeUncertain: category === 'uncertain', category }, new Date(), retryPolicy);
     }
   }
-  return { attempted: claimed.length, sent, remaining: (await failureStore.all()).length };
+  const remainingItems = await failureStore.all();
+  const states = { retryWait: 0, claimed: 0, uncertain: 0, deadLetter: 0 };
+  for (const item of remainingItems) {
+    if (item.state === 'RetryWait') states.retryWait += 1;
+    else if (item.state === 'Claimed') states.claimed += 1;
+    else if (item.state === 'Uncertain') states.uncertain += 1;
+    else if (item.state === 'DeadLetter') states.deadLetter += 1;
+  }
+  console.info(JSON.stringify({ event: 'webhook_retry_run', attempted: claimed.length, sent, remaining: remainingItems.length, states }));
+  return { attempted: claimed.length, sent, remaining: remainingItems.length };
 }
 
 function safeError(error: unknown): string { return error instanceof Error ? error.message : String(error); }

@@ -49,7 +49,10 @@ export function startChannelScheduler(store: JsonChannelPostStore, sender: Chann
     running = true;
     try {
       const result = await runChannelSchedulerOnce(store, sender, channelChatId, new Date(), staleClaimMs, mediaPolicy, { ...options, workerId, canClaim: () => accepting && (options.canClaim?.() ?? true) });
-      if (result.recovered || result.claimed || result.failed || result.uncertain || result.retryWait) console.info(JSON.stringify({ event: 'channel_scheduler_run', ...result }));
+      if (result.recovered || result.claimed || result.failed || result.uncertain || result.retryWait) {
+        const queue = await store.stats();
+        console.info(JSON.stringify({ event: 'channel_scheduler_run', ...result, queue: { scheduled: queue.Scheduled, claimed: queue.Claimed, publishing: queue.Publishing, uncertain: queue.Uncertain, retryWait: queue.RetryWait, failed: queue.Failed } }));
+      }
     } catch (error) {
       console.error('Channel scheduler failed:', error instanceof Error ? error.message : String(error));
     } finally {

@@ -239,6 +239,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       if (reason.length < 8) return ctx.reply(`Uncertain postni qayta yuborishdan oldin kanalni tekshiring va sabab yozing: /channel_retry ${id} <kamida 8 belgi sabab>`);
       const override = await channelPosts.authorizeUncertainOverride(id, ctx.from.id, reason, currentUpdateIdempotencyKey(`channel:override:${id}`));
       if (!override.ok) return ctx.reply(`Controlled override rad etildi. Holat: ${override.post?.status ?? 'unknown'}.`);
+      console.info(JSON.stringify({ event: 'channel_manual_override_authorized', count: 1 }));
     }
     const result = await publishChannelPost(channelPosts, bot.telegram, channelChatId, id, ctx.from.id, retryFailed, channelMediaPolicy, currentUpdateIdempotencyKey(`channel:${retryFailed ? 'retry' : 'publish'}:${id}`), publicationOptions);
     if (result.ok) return ctx.reply(`Kanalga yuborildi: ${result.post.id}, message ${result.post.publishedMessageId}`);
@@ -350,6 +351,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     const reason = reasonParts.join(' ').trim();
     if (!id || !ctx.from?.id || reason.length < 8) return ctx.reply('Format: /replay_webhook <id> <kamida 8 belgi sabab>');
     const result = await failureStore.manualReplay(id, ctx.from.id, reason, new Date(), getLeadWebhookRetryPolicy());
+    if (result.ok) console.info(JSON.stringify({ event: 'webhook_manual_replay_authorized', count: 1 }));
     return ctx.reply(result.ok ? `Webhook manual replay navbatiga qaytarildi: ${id}. Original idempotency identity saqlandi.` : `Manual replay rad etildi: ${result.reason}.`);
   });
   bot.command('lead', async (ctx) => { if (!(await guard(ctx))) return; const id = Number(commandText(ctx).split(/\s+/)[1]); const lead = Number.isSafeInteger(id) ? await store.getByTelegramId(id) : undefined; return ctx.reply(lead ? formatLead(lead) : 'Lead topilmadi.'); });

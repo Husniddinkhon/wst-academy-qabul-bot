@@ -188,20 +188,22 @@ export async function alertActionableChannelFailures(
 ): Promise<OperationalAlertResult> {
   const posts = await channelPosts.all();
   const actionable = posts.filter((post) => {
-    if (post.status !== 'Failed' || !post.failedAt) return false;
-    const age = now.getTime() - new Date(post.failedAt).getTime();
+    const actionableAt = post.status === 'Uncertain' ? post.uncertainAt : post.status === 'Failed' ? post.failedAt : undefined;
+    if (!actionableAt) return false;
+    const age = now.getTime() - new Date(actionableAt).getTime();
     return Number.isFinite(age) && age >= 0 && age <= CHANNEL_FAILURE_ACTION_WINDOW_MS;
   });
   let total: OperationalAlertResult = { attempted: 0, sent: 0, failed: 0, suppressed: false };
   for (const post of actionable) {
+    const actionableAt = post.status === 'Uncertain' ? post.uncertainAt! : post.failedAt!;
     const result = await deliverOperationalAlert({
-      key: `channel:${post.id}:${post.failedAt}:${post.attempts}`,
+      key: `channel:${post.id}:${actionableAt}:${post.attempts}:${post.status}`,
       message: [
         '🚨 WST Academy kanal posti yuborilmadi',
         `Post ID: ${post.id}`,
         post.contentKey ? `Content key: ${post.contentKey}` : undefined,
         `Attempt: ${post.attempts}`,
-        'Holat: Failed/manual review.',
+        `Holat: ${post.status}/manual review.`,
         'Tekshirish: /channel_posts. Kanalni ko‘rmasdan avtomatik retry qilmang.',
       ].filter(Boolean).join('\n'),
       adminIds,
