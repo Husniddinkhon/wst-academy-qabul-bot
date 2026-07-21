@@ -8,6 +8,13 @@ interface LeadDatabase { leads: Lead[]; effects: Record<string, StoredLeadEffect
 export interface FailedWebhookPayload { event: LeadWebhookEvent; lead: Lead; failedAt: string; attempts: number; lastError?: string; idempotencyKey?: string; outcomeUncertain?: boolean; retryToken?: string; retryClaimedAt?: string; }
 interface FailedWebhookDatabase { payloads: FailedWebhookPayload[]; }
 interface FollowUpDatabase { followups: FollowUpState[]; effectKeys: string[]; }
+export interface FollowUpDeliveryRequest { telegramId: number; followUpId: string; task: NonNullable<FollowUpState['task']>; dueAt: string; timeZone: 'Asia/Tashkent' }
+export interface FollowUpDeliveryClaim { telegramId: number; followUpId: string; claimToken: string; task: NonNullable<FollowUpState['task']>; attempt: number }
+export interface FollowUpClaimOptions { workerId: string; leaseMs: number; maxAttempts: number; now?: Date }
+export type FollowUpClaimResult = { ok: true; claim: FollowUpDeliveryClaim; state: FollowUpState } | { ok: false; reason: 'not_found' | 'not_due' | 'owned' | 'terminal' | 'cancelled'; state?: FollowUpState };
+export type FollowUpDeliveryOutcome =
+  | { sent: true }
+  | { sent: false; category: 'transient' | 'permanent' | 'uncertain'; error: string; nextRetryAt?: Date; maxAttempts: number };
 
 export const STATUS_PRIORITY: Record<LeadStatus, number> = { New: 1, Warm: 2, Hot: 3, RegistrationCompleted: 4, CallRequested: 5, OperatorContacted: 6, Paid: 7, Rejected: 0 };
 const AI_SCORE_PRIORITY = { COLD: 1, WARM: 2, HOT: 3 } as const;
@@ -126,11 +133,161 @@ export class JsonWebhookFailureStore {
 
 export class JsonFollowUpStore {
   constructor(private readonly filePath: string) {}
-  async ensure(state: FollowUpState, idempotencyKey?: string): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); if (idempotencyKey && db.effectKeys.includes(idempotencyKey)) return; if (!db.followups.some((f) => f.telegramId === state.telegramId)) db.followups.push(state); if (idempotencyKey) rememberKey(db.effectKeys, idempotencyKey); await atomicWriteJson(this.filePath, db); }); }
-  async upsert(state: FollowUpState, idempotencyKey?: string): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); if (idempotencyKey && db.effectKeys.includes(idempotencyKey)) return; const i = db.followups.findIndex((f) => f.telegramId === state.telegramId); if (i === -1) db.followups.push(state); else db.followups[i] = { ...db.followups[i], ...state }; if (idempotencyKey) rememberKey(db.effectKeys, idempotencyKey); await atomicWriteJson(this.filePath, db); }); }
-  async all(): Promise<FollowUpState[]> { return (await this.read()).followups; }
-  private async read(): Promise<FollowUpDatabase> { const parsed = await readJson<Partial<FollowUpDatabase>>(this.filePath, { followups: [], effectKeys: [] }); return { followups: Array.isArray(parsed.followups) ? parsed.followups : [], effectKeys: Array.isArray(parsed.effectKeys) ? parsed.effectKeys : [] }; }
+  async ensure(state: FollowUpState, idempotencyKey?: string): Promise<void> {
+    await withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      if (idempotencyKey && db.effectKeys.includes(idempotencyKey)) return;
+      if (!db.followups.some((item) => item.telegramId === state.telegramId)) db.followups.push(normalizeFollowUpState(state));
+      if (idempotencyKey) rememberKey(db.effectKeys, idempotencyKey);
+      await atomicWriteJson(this.filePath, db);
+    });
+  }
+  async upsert(state: FollowUpState, idempotencyKey?: string): Promise<void> {
+    await withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      if (idempotencyKey && db.effectKeys.includes(idempotencyKey)) return;
+      const index = db.followups.findIndex((item) => item.telegramId === state.telegramId);
+      const current = index < 0 ? undefined : normalizeFollowUpState(db.followups[index]);
+      let merged = normalizeFollowUpState({ ...(current ?? {}), ...state } as FollowUpState);
+      if (state.registrationCompleted && current && ['Pending', 'Claimed', 'RetryWait'].includes(current.deliveryState ?? 'Pending')) {
+        merged = appendFollowUpAudit({ ...clearFollowUpClaim(merged), deliveryState: 'Cancelled', terminalAt: new Date().toISOString(), lastError: 'Registration completed before follow-up delivery.' }, 'delivery_cancelled_registration_complete');
+      }
+      if (index < 0) db.followups.push(merged); else db.followups[index] = merged;
+      if (idempotencyKey) rememberKey(db.effectKeys, idempotencyKey);
+      await atomicWriteJson(this.filePath, db);
+    });
+  }
+  async all(): Promise<FollowUpState[]> { return (await this.read()).followups.map(normalizeFollowUpState); }
+
+  async claimDelivery(request: FollowUpDeliveryRequest, options: FollowUpClaimOptions): Promise<FollowUpClaimResult> {
+    return withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      const index = db.followups.findIndex((item) => item.telegramId === request.telegramId);
+      if (index < 0) return { ok: false, reason: 'not_found' } as const;
+      const result = claimFollowUpState(normalizeFollowUpState(db.followups[index]), request, options, options.now ?? new Date());
+      if (result.ok) { db.followups[index] = result.state; await atomicWriteJson(this.filePath, db); }
+      else if (result.state && JSON.stringify(result.state) !== JSON.stringify(db.followups[index])) { db.followups[index] = result.state; await atomicWriteJson(this.filePath, db); }
+      return result;
+    });
+  }
+
+  async markDeliverySending(claim: FollowUpDeliveryClaim, now = new Date()): Promise<FollowUpState | undefined> {
+    return withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      const index = db.followups.findIndex((item) => item.telegramId === claim.telegramId);
+      if (index < 0) return undefined;
+      const current = normalizeFollowUpState(db.followups[index]);
+      if (current.followUpId !== claim.followUpId || current.claimToken !== claim.claimToken || current.deliveryState !== 'Claimed') return undefined;
+      const updated = appendFollowUpAudit({ ...current, deliveryState: 'Sending' }, 'delivery_send_started', now, current.claimWorkerId);
+      db.followups[index] = updated;
+      await atomicWriteJson(this.filePath, db);
+      return updated;
+    });
+  }
+
+  async finishDelivery(claim: FollowUpDeliveryClaim, outcome: FollowUpDeliveryOutcome, now = new Date()): Promise<FollowUpState | undefined> {
+    return withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      const index = db.followups.findIndex((item) => item.telegramId === claim.telegramId);
+      if (index < 0) return undefined;
+      const current = normalizeFollowUpState(db.followups[index]);
+      if (current.followUpId !== claim.followUpId || current.claimToken !== claim.claimToken || current.deliveryState !== 'Sending') return undefined;
+      const updated = finishFollowUpState(current, outcome, now);
+      db.followups[index] = updated;
+      await atomicWriteJson(this.filePath, db);
+      return updated;
+    });
+  }
+
+  async cancelDelivery(telegramId: number, reason: string, now = new Date()): Promise<FollowUpState | undefined> {
+    return withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      const index = db.followups.findIndex((item) => item.telegramId === telegramId);
+      if (index < 0) return undefined;
+      const current = normalizeFollowUpState(db.followups[index]);
+      if (!['Pending', 'Claimed', 'RetryWait'].includes(current.deliveryState ?? 'Pending')) return current;
+      const updated = appendFollowUpAudit({ ...clearFollowUpClaim(current), deliveryState: 'Cancelled', terminalAt: now.toISOString(), lastError: reason }, 'delivery_cancelled', now, undefined, reason);
+      db.followups[index] = updated;
+      await atomicWriteJson(this.filePath, db);
+      return updated;
+    });
+  }
+
+  async abandonDeliveryForShutdown(claim: FollowUpDeliveryClaim, now = new Date()): Promise<FollowUpState | undefined> {
+    return withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      const index = db.followups.findIndex((item) => item.telegramId === claim.telegramId);
+      if (index < 0) return undefined;
+      const current = normalizeFollowUpState(db.followups[index]);
+      if (current.followUpId !== claim.followUpId || current.claimToken !== claim.claimToken || !['Claimed', 'Sending'].includes(current.deliveryState ?? '')) return undefined;
+      const updated = current.deliveryState === 'Sending'
+        ? appendFollowUpAudit({ ...clearFollowUpClaim(current), deliveryState: 'Uncertain', terminalAt: now.toISOString(), lastError: 'Shutdown drain expired after follow-up send started; outcome requires evidence review.' }, 'shutdown_delivery_uncertain', now, current.claimWorkerId)
+        : appendFollowUpAudit({ ...clearFollowUpClaim(current), deliveryState: 'RetryWait', nextRetryAt: now.toISOString(), lastError: 'Shutdown drain expired before follow-up send started.' }, 'shutdown_delivery_released_safe', now, current.claimWorkerId);
+      db.followups[index] = updated;
+      await atomicWriteJson(this.filePath, db);
+      return updated;
+    });
+  }
+
+  async recoverExpiredDeliveryClaims(now = new Date()): Promise<FollowUpState[]> {
+    return withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      const recovered: FollowUpState[] = [];
+      db.followups = db.followups.map((raw) => {
+        const current = normalizeFollowUpState(raw);
+        if (!['Claimed', 'Sending'].includes(current.deliveryState ?? '') || !current.leaseExpiresAt || new Date(current.leaseExpiresAt) > now) return current;
+        const updated = current.deliveryState === 'Sending'
+          ? appendFollowUpAudit({ ...clearFollowUpClaim(current), deliveryState: 'Uncertain', terminalAt: now.toISOString(), lastError: 'Follow-up claim expired after Telegram send started; outcome requires evidence review.' }, 'stale_delivery_uncertain', now, current.claimWorkerId)
+          : appendFollowUpAudit({ ...clearFollowUpClaim(current), deliveryState: 'RetryWait', nextRetryAt: now.toISOString(), lastError: 'Follow-up claim expired before Telegram send started.' }, 'stale_delivery_recovered_safe', now, current.claimWorkerId);
+        recovered.push(updated);
+        return updated;
+      });
+      if (recovered.length) await atomicWriteJson(this.filePath, db);
+      return recovered;
+    });
+  }
+
+  private async read(): Promise<FollowUpDatabase> {
+    const parsed = await readJson<Partial<FollowUpDatabase>>(this.filePath, { followups: [], effectKeys: [] });
+    return { followups: Array.isArray(parsed.followups) ? parsed.followups.map(normalizeFollowUpState) : [], effectKeys: Array.isArray(parsed.effectKeys) ? parsed.effectKeys : [] };
+  }
 }
+
+export function claimFollowUpState(current: FollowUpState, request: FollowUpDeliveryRequest, options: FollowUpClaimOptions, now: Date): FollowUpClaimResult {
+  const state = normalizeFollowUpState(current);
+  if (state.registrationCompleted || state.count >= 2 || ['Cancelled', 'Failed', 'Uncertain'].includes(state.deliveryState ?? '')) return { ok: false, reason: state.registrationCompleted || state.deliveryState === 'Cancelled' ? 'cancelled' : 'terminal', state };
+  if (new Date(request.dueAt) > now) return { ok: false, reason: 'not_due', state };
+  if (state.followUpId && state.followUpId !== request.followUpId && state.deliveryState && state.deliveryState !== 'Sent') return { ok: false, reason: 'terminal', state };
+  if (state.followUpId === request.followUpId && state.deliveryState === 'Sent') return { ok: false, reason: 'terminal', state };
+  if (state.claimToken && state.leaseExpiresAt && new Date(state.leaseExpiresAt) > now) return { ok: false, reason: 'owned', state };
+  if (state.claimToken && state.deliveryState === 'Sending') {
+    const uncertain = appendFollowUpAudit({ ...clearFollowUpClaim(state), deliveryState: 'Uncertain', terminalAt: now.toISOString(), lastError: 'Interrupted follow-up send has an unknown Telegram outcome.' }, 'interrupted_delivery_uncertain', now, state.claimWorkerId);
+    return { ok: false, reason: 'terminal', state: uncertain };
+  }
+  if (state.nextRetryAt && new Date(state.nextRetryAt) > now) return { ok: false, reason: 'not_due', state };
+  const attempts = state.followUpId === request.followUpId ? (state.attempts ?? 0) + 1 : 1;
+  if (attempts > options.maxAttempts) {
+    const failed = appendFollowUpAudit({ ...clearFollowUpClaim(state), followUpId: request.followUpId, task: request.task, dueAt: request.dueAt, timeZone: request.timeZone, deliveryState: 'Failed', terminalAt: now.toISOString(), lastError: 'Follow-up retry ceiling exhausted.', attempts: attempts - 1 }, 'delivery_retry_exhausted', now, options.workerId);
+    return { ok: false, reason: 'terminal', state: failed };
+  }
+  const claimToken = randomUUID();
+  const claimed = appendFollowUpAudit({ ...state, followUpId: request.followUpId, task: request.task, dueAt: request.dueAt, timeZone: request.timeZone, deliveryState: 'Claimed', claimToken, claimWorkerId: options.workerId, claimedAt: now.toISOString(), leaseExpiresAt: new Date(now.getTime() + options.leaseMs).toISOString(), attempts, nextRetryAt: undefined, lastError: undefined, terminalAt: undefined }, 'delivery_claimed', now, options.workerId);
+  return { ok: true, claim: { telegramId: request.telegramId, followUpId: request.followUpId, claimToken, task: request.task, attempt: attempts }, state: claimed };
+}
+
+export function finishFollowUpState(current: FollowUpState, outcome: FollowUpDeliveryOutcome, now: Date): FollowUpState {
+  if (outcome.sent) return appendFollowUpAudit({ ...clearFollowUpClaim(current), deliveryState: 'Sent', count: current.count + 1, lastSentAt: now.toISOString(), terminalAt: now.toISOString(), lastError: undefined, nextRetryAt: undefined }, 'delivery_sent', now, current.claimWorkerId);
+  if (outcome.category === 'uncertain') return appendFollowUpAudit({ ...clearFollowUpClaim(current), deliveryState: 'Uncertain', terminalAt: now.toISOString(), lastError: outcome.error, nextRetryAt: undefined }, 'delivery_outcome_uncertain', now, current.claimWorkerId);
+  if (outcome.category === 'permanent' || (current.attempts ?? 0) >= outcome.maxAttempts) return appendFollowUpAudit({ ...clearFollowUpClaim(current), deliveryState: 'Failed', terminalAt: now.toISOString(), lastError: outcome.error, nextRetryAt: undefined }, outcome.category === 'permanent' ? 'delivery_permanent_failure' : 'delivery_retry_exhausted', now, current.claimWorkerId);
+  return appendFollowUpAudit({ ...clearFollowUpClaim(current), deliveryState: 'RetryWait', nextRetryAt: (outcome.nextRetryAt ?? now).toISOString(), lastError: outcome.error }, 'delivery_retry_scheduled', now, current.claimWorkerId);
+}
+
+export function normalizeFollowUpState(state: FollowUpState): FollowUpState {
+  return { ...state, count: Number.isInteger(state.count) ? state.count : 0, attempts: Number.isInteger(state.attempts) ? state.attempts : 0, audit: Array.isArray(state.audit) ? state.audit : [] };
+}
+
+function clearFollowUpClaim(state: FollowUpState): FollowUpState { return { ...state, claimToken: undefined, claimWorkerId: undefined, claimedAt: undefined, leaseExpiresAt: undefined }; }
+function appendFollowUpAudit(state: FollowUpState, event: string, now = new Date(), workerId?: string, reason?: string): FollowUpState { return { ...state, audit: [...(state.audit ?? []), { at: now.toISOString(), event, workerId, followUpId: state.followUpId, reason }].slice(-100) }; }
 
 function rememberLeadEffect(db: LeadDatabase, key: string, effect: StoredLeadEffect): void { db.effects[key] = effect; const keys = Object.keys(db.effects); for (const old of keys.slice(0, Math.max(0, keys.length - 10_000))) delete db.effects[old]; }
 function rememberKey(keys: string[], key: string): void { keys.push(key); if (keys.length > 10_000) keys.splice(0, keys.length - 10_000); }

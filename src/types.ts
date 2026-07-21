@@ -79,6 +79,28 @@ export interface FollowUpState {
   count: number;
   lastSentAt?: string;
   registrationCompleted?: boolean;
+  followUpId?: string;
+  task?: 'registration_incomplete' | 'warm_no_phone';
+  dueAt?: string;
+  timeZone?: 'Asia/Tashkent';
+  deliveryState?: 'Pending' | 'Claimed' | 'Sending' | 'RetryWait' | 'Sent' | 'Uncertain' | 'Failed' | 'Cancelled';
+  claimToken?: string;
+  claimWorkerId?: string;
+  claimedAt?: string;
+  leaseExpiresAt?: string;
+  attempts?: number;
+  nextRetryAt?: string;
+  lastError?: string;
+  terminalAt?: string;
+  audit?: FollowUpAuditEvent[];
+}
+
+export interface FollowUpAuditEvent {
+  at: string;
+  event: string;
+  workerId?: string;
+  followUpId?: string;
+  reason?: string;
 }
 
 export type BotContext = Context & Scenes.WizardContext<BotSession> & { session: BotSession };

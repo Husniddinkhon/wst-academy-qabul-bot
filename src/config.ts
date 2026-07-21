@@ -14,6 +14,10 @@ export interface AppConfig {
   academyReportTimeoutMs: number;
   webhookFailedFile: string;
   followupsFile: string;
+  followUpClaimLeaseMs: number;
+  followUpMaxAttempts: number;
+  followUpRetryBaseMs: number;
+  followUpRetryMaxMs: number;
   telegramUpdatesFile: string;
   telegramUpdateLeaseMs: number;
   telegramUpdateRetention: number;
@@ -98,6 +102,9 @@ export function loadConfig(): AppConfig {
   const channelClaimLeaseMs = parseBoundedInteger(process.env.CHANNEL_CLAIM_LEASE_MS === undefined && legacyChannelLease !== undefined ? 'CHANNEL_PUBLISH_STALE_MS' : 'CHANNEL_CLAIM_LEASE_MS', process.env.CHANNEL_CLAIM_LEASE_MS ?? legacyChannelLease, 600_000, 60_000, 86_400_000);
   const channelClaimRenewMs = parseBoundedInteger('CHANNEL_CLAIM_RENEW_MS', process.env.CHANNEL_CLAIM_RENEW_MS, 120_000, 5_000, 3_600_000);
   if (channelClaimRenewMs >= channelClaimLeaseMs) throw new Error('CHANNEL_CLAIM_RENEW_MS must be shorter than CHANNEL_CLAIM_LEASE_MS.');
+  const followUpRetryBaseMs = parseBoundedInteger('FOLLOWUP_RETRY_BASE_MS', process.env.FOLLOWUP_RETRY_BASE_MS, 300_000, 1_000, 3_600_000);
+  const followUpRetryMaxMs = parseBoundedInteger('FOLLOWUP_RETRY_MAX_MS', process.env.FOLLOWUP_RETRY_MAX_MS, 3_600_000, 1_000, 86_400_000);
+  if (followUpRetryMaxMs < followUpRetryBaseMs) throw new Error('FOLLOWUP_RETRY_MAX_MS must be greater than or equal to FOLLOWUP_RETRY_BASE_MS.');
 
   if (!botToken) {
     throw new Error('BOT_TOKEN is required. Copy .env.example to .env and set your Telegram bot token.');
@@ -139,6 +146,10 @@ export function loadConfig(): AppConfig {
     academyReportTimeoutMs: parseBoundedInteger('ACADEMY_REPORT_TIMEOUT_MS', process.env.ACADEMY_REPORT_TIMEOUT_MS, 5_000, 500, 15_000),
     webhookFailedFile: process.env.WEBHOOK_FAILED_FILE ?? './data/webhook_failed.json',
     followupsFile: process.env.FOLLOWUPS_FILE ?? './data/followups.json',
+    followUpClaimLeaseMs: parseBoundedInteger('FOLLOWUP_CLAIM_LEASE_MS', process.env.FOLLOWUP_CLAIM_LEASE_MS, 300_000, 30_000, 3_600_000),
+    followUpMaxAttempts: parseBoundedInteger('FOLLOWUP_MAX_ATTEMPTS', process.env.FOLLOWUP_MAX_ATTEMPTS, 3, 1, 10),
+    followUpRetryBaseMs,
+    followUpRetryMaxMs,
     telegramUpdatesFile: process.env.TELEGRAM_UPDATES_FILE ?? './data/telegram_updates.json',
     telegramUpdateLeaseMs: parseBoundedInteger('TELEGRAM_UPDATE_LEASE_MS', process.env.TELEGRAM_UPDATE_LEASE_MS, 300_000, 30_000, 3_600_000),
     telegramUpdateRetention: parseBoundedInteger('TELEGRAM_UPDATE_RETENTION', process.env.TELEGRAM_UPDATE_RETENTION, 100_000, 10_000, 1_000_000),

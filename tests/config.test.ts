@@ -144,6 +144,21 @@ test('rejects claim renewal that is not shorter than the lease', () => {
   assert.throws(() => loadConfig(), /must be shorter/);
 });
 
+test('loads and validates bounded follow-up delivery controls', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.FOLLOWUP_CLAIM_LEASE_MS = '120000';
+  process.env.FOLLOWUP_MAX_ATTEMPTS = '4';
+  process.env.FOLLOWUP_RETRY_BASE_MS = '2000';
+  process.env.FOLLOWUP_RETRY_MAX_MS = '8000';
+  const config = loadConfig();
+  assert.equal(config.followUpClaimLeaseMs, 120_000);
+  assert.equal(config.followUpMaxAttempts, 4);
+  assert.equal(config.followUpRetryBaseMs, 2_000);
+  assert.equal(config.followUpRetryMaxMs, 8_000);
+  process.env.FOLLOWUP_RETRY_MAX_MS = '1000';
+  assert.throws(() => loadConfig(), /must be greater than or equal/);
+});
+
 test('loads bounded durable Telegram update controls', () => {
   process.env.BOT_TOKEN = 'test-token';
   process.env.TELEGRAM_UPDATES_FILE = './private/update-ledger.json';

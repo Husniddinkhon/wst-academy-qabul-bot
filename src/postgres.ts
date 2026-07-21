@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { Pool, type PoolClient } from 'pg';
-import { JsonFollowUpStore, JsonLeadStore, mergeLeadRecords, type FunnelEventMetrics, type LeadUpsertResult } from './storage.js';
+import { claimFollowUpState, finishFollowUpState, JsonFollowUpStore, JsonLeadStore, mergeLeadRecords, normalizeFollowUpState, type FollowUpClaimOptions, type FollowUpClaimResult, type FollowUpDeliveryClaim, type FollowUpDeliveryOutcome, type FollowUpDeliveryRequest, type FunnelEventMetrics, type LeadUpsertResult } from './storage.js';
 import type { FollowUpState, Lead, LeadStatus } from './types.js';
 
 export const SCHEMA_VERSION = 2;
@@ -118,13 +118,60 @@ export class PostgresFollowUpStore extends JsonFollowUpStore {
   override async ensure(s: FollowUpState, idempotencyKey?: string): Promise<void> { await this.writeIdempotently(s, idempotencyKey, true); }
   override async upsert(s: FollowUpState, idempotencyKey?: string): Promise<void> { await this.writeIdempotently(s, idempotencyKey, false); }
   override async all():Promise<FollowUpState[]>{const r=await this.pg.pool.query('SELECT payload FROM followups');return r.rows.map(x=>x.payload as FollowUpState);}
+  override async claimDelivery(request: FollowUpDeliveryRequest, options: FollowUpClaimOptions): Promise<FollowUpClaimResult> {
+    return this.mutateState(request.telegramId, (current) => current
+      ? claimFollowUpState(current, request, options, options.now ?? new Date())
+      : { ok: false, reason: 'not_found' } as const);
+  }
+  override async markDeliverySending(claim: FollowUpDeliveryClaim, now = new Date()): Promise<FollowUpState | undefined> {
+    return this.mutateState(claim.telegramId, (current) => {
+      if (!current || current.followUpId !== claim.followUpId || current.claimToken !== claim.claimToken || current.deliveryState !== 'Claimed') return undefined;
+      return pgFollowUpAudit({ ...current, deliveryState: 'Sending' }, 'delivery_send_started', now, current.claimWorkerId);
+    });
+  }
+  override async finishDelivery(claim: FollowUpDeliveryClaim, outcome: FollowUpDeliveryOutcome, now = new Date()): Promise<FollowUpState | undefined> {
+    return this.mutateState(claim.telegramId, (current) => {
+      if (!current || current.followUpId !== claim.followUpId || current.claimToken !== claim.claimToken || current.deliveryState !== 'Sending') return undefined;
+      return finishFollowUpState(current, outcome, now);
+    });
+  }
+  override async cancelDelivery(telegramId: number, reason: string, now = new Date()): Promise<FollowUpState | undefined> {
+    return this.mutateState(telegramId, (current) => {
+      if (!current || !['Pending', 'Claimed', 'RetryWait'].includes(current.deliveryState ?? 'Pending')) return current;
+      return pgFollowUpAudit({ ...pgClearFollowUpClaim(current), deliveryState: 'Cancelled', terminalAt: now.toISOString(), lastError: reason }, 'delivery_cancelled', now, undefined, reason);
+    });
+  }
+  override async abandonDeliveryForShutdown(claim: FollowUpDeliveryClaim, now = new Date()): Promise<FollowUpState | undefined> {
+    return this.mutateState(claim.telegramId, (current) => {
+      if (!current || current.followUpId !== claim.followUpId || current.claimToken !== claim.claimToken || !['Claimed', 'Sending'].includes(current.deliveryState ?? '')) return undefined;
+      return current.deliveryState === 'Sending'
+        ? pgFollowUpAudit({ ...pgClearFollowUpClaim(current), deliveryState: 'Uncertain', terminalAt: now.toISOString(), lastError: 'Shutdown drain expired after follow-up send started; outcome requires evidence review.' }, 'shutdown_delivery_uncertain', now, current.claimWorkerId)
+        : pgFollowUpAudit({ ...pgClearFollowUpClaim(current), deliveryState: 'RetryWait', nextRetryAt: now.toISOString(), lastError: 'Shutdown drain expired before follow-up send started.' }, 'shutdown_delivery_released_safe', now, current.claimWorkerId);
+    });
+  }
+  override async recoverExpiredDeliveryClaims(now = new Date()): Promise<FollowUpState[]> {
+    const candidates = (await this.all()).filter((state) => ['Claimed', 'Sending'].includes(state.deliveryState ?? '') && state.leaseExpiresAt && new Date(state.leaseExpiresAt) <= now);
+    const recovered: FollowUpState[] = [];
+    for (const candidate of candidates) {
+      const updated = await this.mutateState(candidate.telegramId, (current) => {
+        if (!current || !['Claimed', 'Sending'].includes(current.deliveryState ?? '') || !current.leaseExpiresAt || new Date(current.leaseExpiresAt) > now) return undefined;
+        return current.deliveryState === 'Sending'
+          ? pgFollowUpAudit({ ...pgClearFollowUpClaim(current), deliveryState: 'Uncertain', terminalAt: now.toISOString(), lastError: 'Follow-up claim expired after Telegram send started; outcome requires evidence review.' }, 'stale_delivery_uncertain', now, current.claimWorkerId)
+          : pgFollowUpAudit({ ...pgClearFollowUpClaim(current), deliveryState: 'RetryWait', nextRetryAt: now.toISOString(), lastError: 'Follow-up claim expired before Telegram send started.' }, 'stale_delivery_recovered_safe', now, current.claimWorkerId);
+      });
+      if (updated) recovered.push(updated);
+    }
+    return recovered;
+  }
   private async writeIdempotently(s: FollowUpState, idempotencyKey: string | undefined, ensureOnly: boolean): Promise<void> {
     const client = await this.pg.pool.connect();
     try {
       await client.query('BEGIN');
       await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [s.telegramId]);
       const current = await client.query('SELECT payload FROM followups WHERE telegram_id=$1 FOR UPDATE', [s.telegramId]);
-      const merged = ensureOnly && current.rowCount ? current.rows[0].payload as FollowUpState : { ...(current.rows[0]?.payload ?? {}), ...s };
+      let merged = normalizeFollowUpState(ensureOnly && current.rowCount ? current.rows[0].payload as FollowUpState : { ...(current.rows[0]?.payload ?? {}), ...s });
+      const prior = current.rows[0]?.payload as FollowUpState | undefined;
+      if (s.registrationCompleted && prior && ['Pending', 'Claimed', 'RetryWait'].includes(prior.deliveryState ?? 'Pending')) merged = pgFollowUpAudit({ ...pgClearFollowUpClaim(merged), deliveryState: 'Cancelled', terminalAt: new Date().toISOString(), lastError: 'Registration completed before follow-up delivery.' }, 'delivery_cancelled_registration_complete');
       if (idempotencyKey) {
         const claimed = await client.query('INSERT INTO conversation_events(telegram_id,event_type,payload,idempotency_key) VALUES($1,$2,$3,$4) ON CONFLICT(idempotency_key) DO NOTHING RETURNING id', [s.telegramId, 'telegram_followup_claim', { result: merged }, idempotencyKey]);
         if (!claimed.rowCount) { await client.query('COMMIT'); return; }
@@ -133,7 +180,27 @@ export class PostgresFollowUpStore extends JsonFollowUpStore {
       await client.query('COMMIT');
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
+  private async mutateState<T>(telegramId: number, operation: (current: FollowUpState | undefined) => T): Promise<T> {
+    const client = await this.pg.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [telegramId]);
+      const row = await client.query('SELECT payload FROM followups WHERE telegram_id=$1 FOR UPDATE', [telegramId]);
+      const current = row.rowCount ? normalizeFollowUpState(row.rows[0].payload as FollowUpState) : undefined;
+      const result = operation(current);
+      const updated = result && typeof result === 'object' && 'state' in result && (result as { state?: FollowUpState }).state
+        ? (result as { state: FollowUpState }).state
+        : isFollowUpState(result) ? result : undefined;
+      if (updated) await client.query('UPDATE followups SET payload=$2,count=$3,last_sent_at=$4,updated_at=now() WHERE telegram_id=$1', [telegramId, updated, updated.count, updated.lastSentAt ?? null]);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
 }
+
+function isFollowUpState(value: unknown): value is FollowUpState { return Boolean(value && typeof value === 'object' && 'telegramId' in value && 'startedAt' in value && 'count' in value); }
+function pgClearFollowUpClaim(state: FollowUpState): FollowUpState { return { ...state, claimToken: undefined, claimWorkerId: undefined, claimedAt: undefined, leaseExpiresAt: undefined }; }
+function pgFollowUpAudit(state: FollowUpState, event: string, now = new Date(), workerId?: string, reason?: string): FollowUpState { return { ...state, audit: [...(state.audit ?? []), { at: now.toISOString(), event, workerId, followUpId: state.followUpId, reason }].slice(-100) }; }
 
 async function importJson(c:PoolClient,leadsFile:string,followupsFile:string){for(const lead of await jsonArray<Lead>(leadsFile,'leads'))await c.query('INSERT INTO leads(telegram_id,payload,status,source,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',[lead.telegramId,normalizeLead(lead),lead.status,lead.source??'unknown',lead.createdAt,lead.updatedAt??lead.createdAt]);for(const f of await jsonArray<FollowUpState>(followupsFile,'followups'))await c.query('INSERT INTO followups(telegram_id,payload,count,last_sent_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[f.telegramId,f,f.count,f.lastSentAt??null]);}
 async function jsonArray<T>(file:string,key:string):Promise<T[]>{try{const x=JSON.parse(await readFile(file,'utf8')) as Record<string,T[]>;return Array.isArray(x[key])?x[key]:[];}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return[];throw e;}}

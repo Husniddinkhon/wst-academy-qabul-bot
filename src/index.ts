@@ -416,7 +416,12 @@ async function bootstrap(): Promise<void> {
   await bot.telegram.setMyCommands(publicCommands, { scope: { type: 'default' } });
   await Promise.all(config.adminIds.map((chatId) => bot.telegram.setMyCommands([...publicCommands, ...adminCommands.slice(1)], { scope: { type: 'chat', chat_id: chatId } })));
 
-  const followUpTimer = startFollowUpAutomation(bot, store, followUpStore);
+  const followUpTimer = startFollowUpAutomation(bot, store, followUpStore, {
+    claimLeaseMs: config.followUpClaimLeaseMs,
+    maxAttempts: config.followUpMaxAttempts,
+    retryBaseMs: config.followUpRetryBaseMs,
+    retryMaxMs: config.followUpRetryMaxMs,
+  });
   const leadSlaTimer = startLeadSlaEscalation(store, operationalAlerts, bot.telegram, config.adminIds);
   const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);
   const channelSchedulerTimer = config.channelSchedulerEnabled
@@ -430,18 +435,19 @@ async function bootstrap(): Promise<void> {
     bot.stop(signal);
     channelSchedulerTimer?.stopAccepting();
     publisherRuntime.stopAccepting();
-    clearInterval(followUpTimer);
+    followUpTimer.stopAccepting();
     if (telegramUpdateRecoveryTimer) clearInterval(telegramUpdateRecoveryTimer);
     clearInterval(leadSlaTimer);
     if (dailyReportTimer) clearInterval(dailyReportTimer);
-    const [schedulerDrain, publisherDrain] = await Promise.all([
+    const [schedulerDrain, publisherDrain, followUpDrain] = await Promise.all([
       channelSchedulerTimer?.stopAndDrain(config.shutdownDrainTimeoutMs) ?? Promise.resolve({ drained: true, timedOut: false, durationMs: 0 }),
       publisherRuntime.drain(config.shutdownDrainTimeoutMs),
+      followUpTimer.stopAndDrain(config.shutdownDrainTimeoutMs),
     ]);
-    console.log(JSON.stringify({ event: 'shutdown_drain_completed', scheduler: schedulerDrain, publisher: publisherDrain }));
+    console.log(JSON.stringify({ event: 'shutdown_drain_completed', scheduler: schedulerDrain, publisher: publisherDrain, followUp: followUpDrain }));
     if (opsAggregateServer) await new Promise<void>((resolve) => opsAggregateServer.close(() => resolve()));
     if (postgres) await postgres.close();
-    process.exit(schedulerDrain.timedOut || publisherDrain.timedOut ? 1 : 0);
+    process.exit(schedulerDrain.timedOut || publisherDrain.timedOut || followUpDrain.timedOut ? 1 : 0);
   };
 
   process.once('SIGINT', shutdown);
