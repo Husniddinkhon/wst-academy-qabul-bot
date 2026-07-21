@@ -8,8 +8,9 @@ Every failed delivery keeps its original `Idempotency-Key` and a stable local fa
 - Other HTTP 4xx responses enter terminal `DeadLetter`.
 - Timeout, connection loss, or an interrupted retry enters `Uncertain`; it is never automatically sent again.
 - Claims are token-owned with a lease. An expired in-flight claim becomes `Uncertain` because the receiver might have processed it.
+- The worker claims one due record immediately before each outbound call, using a fresh logical timestamp for every lease, rather than leasing the whole queue; this prevents queued leases from expiring while earlier deliveries run.
 - Backoff is exponential and capped. `WEBHOOK_MAX_ATTEMPTS` creates an audited `webhook_retry_exhausted` dead letter.
-- Records are retained only until `retainedUntil`. Expiry removal emits an aggregate `webhook_retention_expired` event and no applicant or endpoint data.
+- Records are retained only until `retainedUntil`, except that an actively token-owned claim is preserved until ownership resolves. Expiry removal emits an aggregate `webhook_retention_expired` event and no applicant or endpoint data.
 - Successful retry removes the failure record only after a definitive 2xx response.
 
 Settings:

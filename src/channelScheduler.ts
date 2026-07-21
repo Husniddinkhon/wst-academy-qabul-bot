@@ -23,7 +23,12 @@ export interface ChannelSchedulerHandle {
 }
 
 export async function runChannelSchedulerOnce(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, now = new Date(), staleClaimMs = 10 * 60_000, mediaPolicy?: ChannelMediaPolicy, options: ChannelSchedulerWorkerOptions = {}): Promise<SchedulerRunResult> {
-  const [recovered] = await Promise.all([store.recoverExpiredClaims(now), store.closeExpiredReconciliationWindows(now)]);
+  const [leaseRecovered, legacyRecovered] = await Promise.all([
+    options.uncertainWindowMs === undefined ? store.recoverExpiredClaims(now) : store.recoverExpiredClaims(now, options.uncertainWindowMs),
+    store.recoverStalePublishing(new Date(now.getTime() - staleClaimMs), options.uncertainWindowMs, now),
+    store.closeExpiredReconciliationWindows(now),
+  ]);
+  const recovered = [...leaseRecovered, ...legacyRecovered];
   const result = { recovered: recovered.length, claimed: 0, published: 0, failed: 0, uncertain: recovered.filter((post) => post.status === 'Uncertain').length, retryWait: recovered.filter((post) => post.status === 'RetryWait').length };
   for (let i = 0; i < 20; i += 1) {
     if (options.canClaim && !options.canClaim()) break;
@@ -65,7 +70,11 @@ export function startChannelScheduler(store: JsonChannelPostStore, sender: Chann
       running = false;
     }
   };
-  const invoke = () => { currentRun = run().finally(() => { currentRun = undefined; }); };
+  const invoke = () => {
+    if (currentRun || !accepting) return;
+    const tracked = run().finally(() => { if (currentRun === tracked) currentRun = undefined; });
+    currentRun = tracked;
+  };
   invoke();
   const timer = setInterval(invoke, pollMs);
   return {

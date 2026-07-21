@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { JsonChannelPostStore } from '../src/channelPosts.js';
-import { publishChannelPost, type ChannelSender } from '../src/channelPublisher.js';
+import { publishChannelPost, PublisherRuntime, type ChannelSender } from '../src/channelPublisher.js';
 
 async function fixture(): Promise<{ store: JsonChannelPostStore; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(path.join(tmpdir(), 'channel-publisher-'));
@@ -85,9 +85,9 @@ test('Telegram success followed by local commit failure preserves observed messa
   try {
     const post = await store.create('Commit failure after Telegram success', undefined, 10);
     const original = store.markPublished.bind(store);
-    let failCommit = true;
+    let failedCommits = 0;
     store.markPublished = async (...args) => {
-      if (failCommit) { failCommit = false; throw new Error('local publication commit failed'); }
+      if (failedCommits < 2) { failedCommits += 1; throw new Error('local publication commit failed'); }
       return original(...args);
     };
     const sender: ChannelSender = {
@@ -103,6 +103,47 @@ test('Telegram success followed by local commit failure preserves observed messa
     const reconciled = await store.reconcileUncertain(post.id, { outcome: 'published', actorId: 20, messageId: 991, note: 'Matched the locally observed Telegram response.' });
     assert.equal(reconciled.ok, true);
     assert.equal(reconciled.ok ? reconciled.post.status : '', 'Published');
+  } finally { await cleanup(); }
+});
+
+test('a known Telegram message id is automatically reconciled after one transient local commit failure', async () => {
+  const { store, cleanup } = await fixture();
+  try {
+    const post = await store.create('Known response recovery', undefined, 10);
+    const original = store.markPublished.bind(store);
+    let failed = false;
+    store.markPublished = async (...args) => {
+      if (!failed) { failed = true; throw new Error('one transient fsync failure'); }
+      return original(...args);
+    };
+    const sender: ChannelSender = { async sendMessage() { return { message_id: 992 }; }, async sendPhoto() { throw new Error('unexpected photo'); } };
+    const result = await publishChannelPost(store, sender, '-1001', post.id, 20);
+    assert.equal(result.ok, true);
+    assert.equal((await store.get(post.id))?.status, 'Published');
+    assert.equal((await store.get(post.id))?.publishedMessageId, 992);
+  } finally { await cleanup(); }
+});
+
+test('campaign validation failure releases the publisher runtime entry', async () => {
+  const { store, cleanup } = await fixture();
+  try {
+    const post = await store.create('UNV Uho-P1G-M3F4D-EU aksiya 499 000', undefined, 10);
+    const runtime = new PublisherRuntime();
+    const sender: ChannelSender = { async sendMessage() { throw new Error('must not send'); }, async sendPhoto() { throw new Error('must not send'); } };
+    const result = await publishChannelPost(store, sender, '-1001', post.id, 20, false, undefined, undefined, { runtime, now: new Date('2026-07-21T05:01:00.000Z') });
+    assert.equal(result.ok, false);
+    assert.equal(runtime.activeCount, 0);
+    assert.equal((await runtime.drain(100)).drained, true);
+
+    const storageFailure = await store.create('UNV Uho-P1G-M3F4D-EU aksiya 499 000', undefined, 10);
+    const failureRuntime = new PublisherRuntime();
+    store.markFailed = async () => { throw new Error('simulated durable write failure'); };
+    await assert.rejects(
+      publishChannelPost(store, sender, '-1001', storageFailure.id, 20, false, undefined, undefined, { runtime: failureRuntime, now: new Date('2026-07-21T05:01:00.000Z') }),
+      /simulated durable write failure/,
+    );
+    assert.equal(failureRuntime.activeCount, 0);
+    assert.equal((await failureRuntime.drain(100)).drained, true);
   } finally { await cleanup(); }
 });
 

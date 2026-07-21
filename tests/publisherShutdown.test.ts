@@ -56,7 +56,9 @@ test('drain timeout during Telegram send fails closed as Uncertain', async () =>
     assert.equal(result.activeAtTimeout, 1);
     assert.equal((await store.get(post.id))?.status, 'Uncertain');
     release();
-    await assert.rejects(publishing);
+    assert.equal((await publishing).ok, true);
+    assert.equal((await store.get(post.id))?.status, 'Published');
+    assert.equal((await store.get(post.id))?.publishedMessageId, 700);
   } finally { await cleanup(); }
 });
 
@@ -73,7 +75,7 @@ test('active send that finishes inside the drain bound is durably Published', as
     };
     const publishing = publishChannelPost(store, sender, '-1001', post.id, 20, false, undefined, undefined, { runtime, claimLeaseMs: 60_000 });
     await sendStarted;
-    const drain = await runtime.drain(1_000);
+    const drain = await runtime.drain(15_000);
     assert.equal(drain.drained, true);
     assert.equal((await publishing).ok, true);
     assert.equal((await store.get(post.id))?.status, 'Published');

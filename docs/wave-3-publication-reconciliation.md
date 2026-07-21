@@ -27,6 +27,7 @@ Each attempt stores the stable post ID and semantic key, target channel, random 
 - A valid claim cannot be taken by a second worker. Terminal and `Uncertain` posts cannot be claimed.
 - Cancellation is permitted through `Claimed`; it clears the token. Cancellation after `Publishing` is rejected because the remote outcome may already exist.
 - An expired `Claimed` lease with no `sendStartedAt` becomes `RetryWait`. An expired `Publishing` lease becomes `Uncertain` and is never auto-retried.
+- A legacy Wave 2 `Publishing` record without lease metadata is also recovered as `Uncertain`; compatibility data cannot remain stranded or be treated as safe to resend.
 - The active publisher renews its lease at `CHANNEL_CLAIM_RENEW_MS`; configuration requires this interval to be shorter than `CHANNEL_CLAIM_LEASE_MS`.
 
 ## Telegram limitation and reconciliation
@@ -42,7 +43,7 @@ The safe process is:
 5. If neither outcome is provable before `CHANNEL_UNCERTAIN_WINDOW_MS`, the state changes to `manual_review_required` and remains fail-closed.
 6. An exceptional resend without proof requires `/channel_retry <id> <reason>`. The actor, reason, original attempt, and unchanged semantic key are audited; an aggregate manual-override event is logged without actor/chat ID.
 
-Known message IDs returned before a local completion failure are retained as evidence. A process crash between Telegram receiving the response and any local write can still lose that message ID; such a case correctly remains `Uncertain`.
+Known message IDs returned before a local completion failure are retained as evidence. The same exact attempt may complete an idempotent local reconciliation to `Published` when its Telegram response arrives late or after one transient local write failure; this does not issue another Telegram request. Persistent local failure preserves the observed message ID in `Uncertain`. A process crash between Telegram receiving the response and any local write can still lose that message ID; such a case correctly remains `Uncertain`.
 
 ## Error classification
 

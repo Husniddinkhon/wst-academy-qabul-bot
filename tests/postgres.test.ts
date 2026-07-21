@@ -61,5 +61,28 @@ test('migration is idempotent and concurrent updates preserve events', { skip: !
   ]);
   assert.equal((await fs.all()).filter(x => x.telegramId === 990004).length, 1);
   assert.equal((await pg.pool.query("select count(*)::int n from conversation_events where telegram_id=$1 and event_type='telegram_followup_claim'", [990004])).rows[0].n, 2);
+
+  await fs.upsert({ telegramId: 990005, startedAt: now, count: 0 });
+  const deliveryRequest = { telegramId: 990005, followUpId: 'followup:990005:1:registration_incomplete', task: 'registration_incomplete' as const, dueAt: new Date(Date.now() - 1_000).toISOString(), timeZone: 'Asia/Tashkent' as const };
+  const [claimA, claimB] = await Promise.all([
+    fs.claimDelivery(deliveryRequest, { workerId: 'pg-worker-a', leaseMs: 60_000, maxAttempts: 3 }),
+    new PostgresFollowUpStore(pg).claimDelivery(deliveryRequest, { workerId: 'pg-worker-b', leaseMs: 60_000, maxAttempts: 3 }),
+  ]);
+  assert.equal([claimA, claimB].filter(result => result.ok).length, 1);
+  const owner = claimA.ok ? claimA : claimB.ok ? claimB : undefined;
+  assert.ok(owner?.ok);
+  if (owner?.ok) {
+    assert.ok(await fs.markDeliverySending(owner.claim));
+    assert.ok(await fs.finishDelivery(owner.claim, { sent: true }));
+  }
+  assert.equal((await fs.all()).find(item => item.telegramId === 990005)?.count, 1);
+
+  const crashAt = new Date('2026-07-21T10:00:00.000Z');
+  await fs.upsert({ telegramId: 990006, startedAt: crashAt.toISOString(), count: 0 });
+  const crashed = await fs.claimDelivery({ telegramId: 990006, followUpId: 'followup:990006:1:registration_incomplete', task: 'registration_incomplete', dueAt: crashAt.toISOString(), timeZone: 'Asia/Tashkent' }, { workerId: 'pg-crashed', leaseMs: 1_000, maxAttempts: 3, now: crashAt });
+  assert.equal(crashed.ok, true);
+  if (crashed.ok) await fs.markDeliverySending(crashed.claim, crashAt);
+  const recovered = await fs.recoverExpiredDeliveryClaims(new Date(crashAt.getTime() + 1_001));
+  assert.equal(recovered.find(item => item.telegramId === 990006)?.deliveryState, 'Uncertain');
   await pg.close();
 });

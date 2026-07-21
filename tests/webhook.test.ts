@@ -115,7 +115,7 @@ test('definite HTTP failure retries once with the original idempotency key', asy
   const store = {
     async add(item: Omit<(typeof queued)[number], 'failedAt' | 'attempts'>) { queued.push({ ...item, failedAt: '2026-07-21T10:00:00.000Z', attempts: 1 }); },
     async all() { return queued; },
-    async claimRetryable() { queued[0].retryToken = 'claim-1'; return [{ ...queued[0] }]; },
+    async claimRetryable() { if (!queued[0]) return []; queued[0].retryToken = 'claim-1'; return [{ ...queued[0] }]; },
     async finishRetry(_item: FailedWebhookPayload, outcome: { sent: boolean }) { if (outcome.sent) queued.splice(0); },
   } as JsonWebhookFailureStore;
   await deliverLeadWebhook('https://academy.example/api/v1/admissions/bot-leads', store, 'lead_created', lead, 1_000, 'telegram-update:81:webhook:lead');
@@ -269,4 +269,52 @@ test('HTTP 4xx is permanent while HTTP 5xx remains a bounded transient retry', a
     assert.equal((await transientStore.all())[0].failureCategory, 'transient');
     assert.ok((await transientStore.all())[0].nextRetryAt);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('retention boundary cannot delete a live webhook claim', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'webhook-live-retention-'));
+  try {
+    const store = new JsonWebhookFailureStore(path.join(directory, 'failures.json'));
+    const policy = { ...DEFAULT_WEBHOOK_RETRY_POLICY, retentionMs: 5_000, retryBaseMs: 1_000, claimLeaseMs: 60_000 };
+    const start = new Date('2026-07-21T10:00:00.000Z');
+    await store.add({ event: 'lead_created', lead, idempotencyKey: 'live-retention', failureCategory: 'transient' }, policy, start);
+    const [claim] = await store.claimRetryable(new Date(start.getTime() + 1_001), policy);
+    assert.ok(claim);
+    assert.equal((await store.claimRetryable(new Date(start.getTime() + 5_001), policy)).length, 0);
+    assert.equal((await store.all())[0].retryToken, claim.retryToken);
+    await store.finishRetry(claim, { sent: true }, new Date(start.getTime() + 5_002), policy);
+    assert.equal((await store.all()).length, 0);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('webhook retry worker claims each queued item just in time', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'webhook-jit-claims-'));
+  const originalNow = Date.now;
+  try {
+    const store = new JsonWebhookFailureStore(path.join(directory, 'failures.json'));
+    const policy = { ...DEFAULT_WEBHOOK_RETRY_POLICY, retryBaseMs: 1_000, retryMaxMs: 1_000, claimLeaseMs: 60_000 };
+    configureLeadWebhookRetryPolicy(policy);
+    const start = new Date('2026-07-21T10:00:00.000Z');
+    await store.add({ event: 'lead_created', lead, idempotencyKey: 'jit-one', failureCategory: 'transient' }, policy, start);
+    await store.add({ event: 'lead_updated', lead, idempotencyKey: 'jit-two', failureCategory: 'transient' }, policy, start);
+    let wallNow = originalNow();
+    Date.now = () => wallNow;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      if (calls === 1) {
+        const queue = await store.all();
+        assert.equal(queue.filter((item) => item.state === 'Claimed').length, 1);
+        assert.equal(queue.filter((item) => item.state === 'RetryWait').length, 1);
+        wallNow += policy.claimLeaseMs + 1_000;
+      } else {
+        const [active] = (await store.all()).filter((item) => item.state === 'Claimed');
+        assert.equal(active.retryClaimedAt, new Date(start.getTime() + 1_001 + policy.claimLeaseMs + 1_000).toISOString());
+      }
+      return { ok: true, status: 200 } as Response;
+    }) as typeof fetch;
+    const result = await retryFailedWebhooks('https://academy.example/hook', store, new Date(start.getTime() + 1_001));
+    assert.deepEqual(result, { attempted: 2, sent: 2, remaining: 0 });
+    assert.equal(calls, 2);
+  } finally { Date.now = originalNow; await rm(directory, { recursive: true, force: true }); }
 });

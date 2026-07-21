@@ -145,9 +145,14 @@ export async function deliverLeadWebhook(webhookUrl: string | undefined, failure
 export async function retryFailedWebhooks(webhookUrl: string | undefined, failureStore: JsonWebhookFailureStore, now = new Date()): Promise<{ attempted: number; sent: number; remaining: number }> {
   const failed = await failureStore.all();
   if (!webhookUrl || failed.length === 0) return { attempted: 0, sent: 0, remaining: failed.length };
-  const claimed = await failureStore.claimRetryable(now, retryPolicy);
+  const startedAt = Date.now();
+  const claimed: Awaited<ReturnType<JsonWebhookFailureStore['claimRetryable']>> = [];
   let sent = 0;
-  for (const item of claimed) {
+  for (let index = 0; index < Math.min(failed.length, 100); index += 1) {
+    const claimNow = new Date(now.getTime() + Math.max(0, Date.now() - startedAt));
+    const [item] = await failureStore.claimRetryable(claimNow, retryPolicy, 1);
+    if (!item) break;
+    claimed.push(item);
     try {
       await sendLeadWebhook(webhookUrl, item.event, item.lead, LEAD_WEBHOOK_TIMEOUT_MS, item.idempotencyKey);
       await failureStore.finishRetry(item, { sent: true }, new Date(), retryPolicy);

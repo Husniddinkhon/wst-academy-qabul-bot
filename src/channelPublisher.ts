@@ -105,9 +105,14 @@ export async function publishClaimedChannelPost(store: JsonChannelPostStore, sen
   }
   const blocked = campaignExpiryError(post, now);
   if (blocked) {
-    const failed = await store.markFailed(post.id, attemptId, blocked, 'validation', claimToken, now);
-    if (!failed) throw new Error('Publish state changed before campaign validation completed');
-    return { ok: false, reason: 'campaign_expired', post: failed, error: blocked };
+    try {
+      const failed = await store.markFailed(post.id, attemptId, blocked, 'validation', claimToken, now);
+      if (!failed) throw new Error('Publish state changed before campaign validation completed');
+      return { ok: false, reason: 'campaign_expired', post: failed, error: blocked };
+    } finally {
+      options.runtime?.finish(runtimeKey);
+      runtimeKey = undefined;
+    }
   }
   let observedMessageId: number | undefined;
   let sendStarted = false;
@@ -128,7 +133,7 @@ export async function publishClaimedChannelPost(store: JsonChannelPostStore, sen
       ? await withTelegramCallLabel(`channel:publish:${post.id}`, () => sender.sendPhoto(channelChatId, photo, { caption: post.text }))
       : await withTelegramCallLabel(`channel:publish:${post.id}`, () => sender.sendMessage(channelChatId, post.text));
     observedMessageId = sent.message_id;
-    const published = await store.markPublished(post.id, attemptId, sent.message_id, claimToken);
+    const published = await persistObservedPublication(store, post.id, attemptId, sent.message_id, claimToken);
     if (!published) throw new Error('Publish state changed before completion');
     return { ok: true, post: published };
   } catch (error) {
@@ -151,6 +156,20 @@ export async function publishClaimedChannelPost(store: JsonChannelPostStore, sen
     if (renewal) clearInterval(renewal);
     options.runtime?.finish(runtimeKey);
   }
+}
+
+async function persistObservedPublication(store: JsonChannelPostStore, postId: string, attemptId: string, messageId: number, claimToken: string): Promise<ChannelPost | undefined> {
+  try {
+    const owned = await store.markPublished(postId, attemptId, messageId, claimToken);
+    if (owned) return owned;
+  } catch (error) {
+    try {
+      const reconciled = await store.markPublished(postId, attemptId, messageId);
+      if (reconciled) return reconciled;
+    } catch { /* preserve the original durable-write error for uncertainty classification */ }
+    throw error;
+  }
+  return store.markPublished(postId, attemptId, messageId);
 }
 
 type FailureDisposition =

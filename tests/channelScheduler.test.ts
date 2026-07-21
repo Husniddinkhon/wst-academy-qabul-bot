@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -9,9 +9,10 @@ import { formatTashkentSchedule, parseTashkentSchedule, runChannelSchedulerOnce,
 import { JsonOperationalAlertStore } from '../src/operationalAlerts.js';
 import { UNV_CAMPAIGN_ID } from '../src/productSales.js';
 
-async function fixture(): Promise<{ store: JsonChannelPostStore; cleanup: () => Promise<void> }> {
+async function fixture(): Promise<{ store: JsonChannelPostStore; filePath: string; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(path.join(tmpdir(), 'channel-scheduler-'));
-  return { store: new JsonChannelPostStore(path.join(directory, 'posts.json')), cleanup: () => rm(directory, { recursive: true, force: true }) };
+  const filePath = path.join(directory, 'posts.json');
+  return { store: new JsonChannelPostStore(filePath), filePath, cleanup: () => rm(directory, { recursive: true, force: true }) };
 }
 
 function sender(calls: { texts: number; photos: number }): ChannelSender {
@@ -176,4 +177,52 @@ test('actionable Failed reconciliation still alerts when the scheduler run itsel
     await cleanup();
     await rm(alertDirectory, { recursive: true, force: true });
   }
+});
+
+test('legacy Wave 2 Publishing record without a lease becomes Uncertain instead of stranding', async () => {
+  const { store, filePath, cleanup } = await fixture();
+  try {
+    const post = await store.create('Legacy in-flight publication', undefined, 10);
+    await store.schedule(post.id, '2026-07-15T05:00:00.000Z', 20);
+    const claim = await store.claimNextDue(new Date('2026-07-15T05:01:00.000Z'));
+    assert.equal(claim.ok, true);
+    if (!claim.ok) return;
+    await store.markSendStarted(post.id, claim.attemptId, claim.claimToken, '-1001', 'e'.repeat(64), new Date('2026-07-15T05:01:01.000Z'));
+    const db = JSON.parse(await readFile(filePath, 'utf8')) as { posts: Array<Record<string, unknown>> };
+    db.posts[0].leaseExpiresAt = undefined;
+    db.posts[0].claimToken = undefined;
+    await writeFile(filePath, JSON.stringify(db), 'utf8');
+    const calls = { texts: 0, photos: 0 };
+    const result = await runChannelSchedulerOnce(store, sender(calls), '-1001', new Date('2026-07-15T05:20:00.000Z'), 60_000, undefined, { uncertainWindowMs: 3_600_000 });
+    assert.equal(result.recovered, 1);
+    assert.deepEqual(calls, { texts: 0, photos: 0 });
+    const saved = await store.get(post.id);
+    assert.equal(saved?.status, 'Uncertain');
+    assert.equal(saved?.reconciliationDeadlineAt, '2026-07-15T06:20:00.000Z');
+  } finally { await cleanup(); }
+});
+
+test('overlapping timer ticks cannot erase the active scheduler drain reference', async () => {
+  const { store, cleanup } = await fixture();
+  try {
+    const post = await store.create('Long-running scheduled publication', undefined, 10);
+    await store.schedule(post.id, new Date(Date.now() - 1_000).toISOString(), 20);
+    let started!: () => void;
+    let release!: () => void;
+    const sendStarted = new Promise<void>((resolve) => { started = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const slowSender: ChannelSender = {
+      async sendMessage() { started(); await blocked; return { message_id: 808 }; },
+      async sendPhoto() { throw new Error('unexpected photo'); },
+    };
+    const worker = startChannelScheduler(store, slowSender, '-1001', 5, 60_000);
+    await sendStarted;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const drain = await worker.stopAndDrain(10);
+    assert.equal(drain.timedOut, true);
+    assert.equal(worker.isRunning, true);
+    release();
+    await waitFor(() => !worker.isRunning);
+    assert.equal((await store.get(post.id))?.status, 'Published');
+  } finally { await cleanup(); }
 });

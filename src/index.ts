@@ -20,6 +20,7 @@ import { isPermittedSalesConversation, persistSalesConversation } from './salesC
 import { startChannelScheduler } from './channelScheduler.js';
 import { createAcademyMetricsLoader } from './salesReporting.js';
 import { getBotLaunchOptions } from './botLaunch.js';
+import { launchWithShutdownGate } from './telegramLifecycle.js';
 import { JsonOperationalAlertStore } from './operationalAlerts.js';
 import { startLeadSlaEscalation } from './leadSla.js';
 import { startQabulOpsAggregateServer } from './opsAggregateServer.js';
@@ -439,13 +440,20 @@ async function bootstrap(): Promise<void> {
     : undefined;
 
   let telegramUpdateRecoveryTimer: NodeJS.Timeout | undefined;
+  let botRunning = false;
+  let shutdownRequested = false;
+  let shutdownInFlight: Promise<void> | undefined;
 
-  const shutdown = async (signal: NodeJS.Signals) => {
+  const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
+    shutdownRequested = true;
     console.log(JSON.stringify({ event: 'shutdown_started', signal }));
-    bot.stop(signal);
     channelSchedulerTimer?.stopAccepting();
     publisherRuntime.stopAccepting();
     followUpTimer.stopAccepting();
+    if (botRunning) {
+      try { bot.stop(signal); } catch (error) { console.error('Telegram polling stop failed:', error instanceof Error ? error.message : String(error)); }
+      botRunning = false;
+    }
     if (telegramUpdateRecoveryTimer) clearInterval(telegramUpdateRecoveryTimer);
     clearInterval(leadSlaTimer);
     if (dailyReportTimer) clearInterval(dailyReportTimer);
@@ -460,9 +468,16 @@ async function bootstrap(): Promise<void> {
     process.exit(schedulerDrain.timedOut || publisherDrain.timedOut || followUpDrain.timedOut ? 1 : 0);
   };
 
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
-  await bot.launch(getBotLaunchOptions(config), () => {
+  const requestShutdown = (signal: NodeJS.Signals) => {
+    shutdownInFlight ??= shutdown(signal).catch((error) => {
+      console.error('Graceful shutdown failed:', error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    });
+  };
+  process.once('SIGINT', requestShutdown);
+  process.once('SIGTERM', requestShutdown);
+  await launchWithShutdownGate(bot, getBotLaunchOptions(config), () => shutdownRequested, () => {
+    botRunning = true;
     telegramUpdateRecoveryTimer = startTelegramUpdateRecovery(bot, updateJournal);
     console.log('WST Academy qabul bot is running.');
   });

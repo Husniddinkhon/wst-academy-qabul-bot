@@ -273,14 +273,13 @@ export class JsonChannelPostStore {
   }
 
   /** Backward-compatible Wave 2 entrypoint. Publishing claims now fail closed as Uncertain. */
-  async recoverStalePublishing(cutoff: Date): Promise<ChannelPost[]> {
+  async recoverStalePublishing(cutoff: Date, uncertainWindowMs = DEFAULT_UNCERTAIN_WINDOW_MS, now = new Date()): Promise<ChannelPost[]> {
     return this.mutate((db) => {
-      const now = new Date();
       const recovered: ChannelPost[] = [];
       db.posts = db.posts.map((raw) => {
         const post = normalizePost(raw);
-        if (post.status !== 'Publishing' || !post.publishStartedAt || new Date(post.publishStartedAt) > cutoff) return post;
-        const next = toUncertain(post, 'Publish outcome unknown after restart; inspect channel evidence before any controlled override.', now, DEFAULT_UNCERTAIN_WINDOW_MS, 'legacy_stale_publish_recovered');
+        if (post.status !== 'Publishing' || post.leaseExpiresAt || !post.publishStartedAt || new Date(post.publishStartedAt) > cutoff) return post;
+        const next = toUncertain(post, 'Publish outcome unknown after restart; inspect channel evidence before any controlled override.', now, uncertainWindowMs, 'legacy_stale_publish_recovered');
         recovered.push(next);
         return next;
       });

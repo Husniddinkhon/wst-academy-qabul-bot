@@ -143,7 +143,7 @@ export class JsonWebhookFailureStore {
   }
   async all(): Promise<FailedWebhookPayload[]> { return (await this.read()).payloads.map(normalizeWebhookFailure); }
   async replace(payloads: FailedWebhookPayload[]): Promise<void> { await withFileLock(this.filePath, async () => atomicWriteJson(this.filePath, { payloads: payloads.map(normalizeWebhookFailure) })); }
-  async claimRetryable(now = new Date(), policy = DEFAULT_WEBHOOK_RETRY_POLICY): Promise<FailedWebhookPayload[]> {
+  async claimRetryable(now = new Date(), policy = DEFAULT_WEBHOOK_RETRY_POLICY, limit = 1): Promise<FailedWebhookPayload[]> {
     return withFileLock(this.filePath, async () => {
       const db = await this.read();
       const claimed: FailedWebhookPayload[] = [];
@@ -151,7 +151,10 @@ export class JsonWebhookFailureStore {
       let expired = 0;
       db.payloads = db.payloads.filter((raw) => {
         const item = normalizeWebhookFailure(raw);
-        if (item.retainedUntil && new Date(item.retainedUntil) <= now) { expired += 1; changed = true; return false; }
+        if (item.retainedUntil && new Date(item.retainedUntil) <= now) {
+          if (item.retryToken) return true;
+          expired += 1; changed = true; return false;
+        }
         return true;
       });
       for (let index = 0; index < db.payloads.length; index += 1) {
@@ -174,6 +177,7 @@ export class JsonWebhookFailureStore {
           continue;
         }
         if (item.nextRetryAt && new Date(item.nextRetryAt) > now) continue;
+        if (claimed.length >= Math.max(1, limit)) continue;
         item = appendWebhookAudit({ ...item, state: 'Claimed', retryToken: randomUUID(), retryClaimedAt: now.toISOString(), retryLeaseUntil: new Date(now.getTime() + policy.claimLeaseMs).toISOString() }, 'webhook_retry_claimed', now);
         db.payloads[index] = item;
         claimed.push({ ...item });
@@ -395,7 +399,7 @@ export function finishFollowUpState(current: FollowUpState, outcome: FollowUpDel
 }
 
 export function normalizeFollowUpState(state: FollowUpState): FollowUpState {
-  return { ...state, count: Number.isInteger(state.count) ? state.count : 0, attempts: Number.isInteger(state.attempts) ? state.attempts : 0, audit: Array.isArray(state.audit) ? state.audit : [] };
+  return { ...state, count: Number.isInteger(state.count) ? state.count : 0 };
 }
 
 function clearFollowUpClaim(state: FollowUpState): FollowUpState { return { ...state, claimToken: undefined, claimWorkerId: undefined, claimedAt: undefined, leaseExpiresAt: undefined }; }

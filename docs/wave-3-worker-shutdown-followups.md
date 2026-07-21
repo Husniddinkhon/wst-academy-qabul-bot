@@ -4,7 +4,7 @@
 
 SIGTERM and SIGINT now perform this sequence:
 
-1. Stop Telegram polling, channel scheduler claims, follow-up claims, and manual publisher claims.
+1. Stop Telegram polling when it has started, then stop channel scheduler claims, follow-up claims, and manual publisher claims. Launch cancellation checkpoints before and after Telegraf's pre-poll webhook cleanup prevent an early signal from falling through into polling.
 2. Clear periodic timers.
 3. Drain active channel and follow-up sends for at most `SHUTDOWN_DRAIN_TIMEOUT_MS`.
 4. A channel claim that never started send becomes `RetryWait`; an in-send channel attempt becomes `Uncertain`.
@@ -12,7 +12,7 @@ SIGTERM and SIGINT now perform this sequence:
 6. Close the aggregate server and PostgreSQL pool.
 7. Log aggregate drain duration/status and exit non-zero if a drain timed out.
 
-The timeout does not abort or label a possibly accepted Telegram message as unsent. If a late send returns after its claim was made uncertain, its stale token cannot overwrite the durable state.
+The timeout does not abort or label a possibly accepted Telegram message as unsent. If a late send returns after its claim was made uncertain, only that exact persisted attempt may attach the returned Telegram message ID and reconcile to `Published`; unrelated or stale ownership cannot overwrite the durable state and no second Telegram request is issued.
 
 Validated settings:
 
