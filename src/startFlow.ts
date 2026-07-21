@@ -24,6 +24,9 @@ export function resetSessionForStart(session: BotSession, attribution: StartAttr
   session.source = attribution.source;
   session.campaignId = attribution.campaignId;
   session.leadDraft = undefined;
+  session.applicantId = undefined;
+  session.outboundConsentAccepted = undefined;
+  session.pendingConsentIntent = undefined;
   session.waitingForCallPhone = undefined;
   session.lessonIndex = undefined;
   session.quizIndex = undefined;

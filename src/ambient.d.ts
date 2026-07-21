@@ -63,7 +63,8 @@ declare module 'telegraf' {
 
     export interface WizardContext<D extends WizardSessionData = WizardSessionData> {
       from?: { id: number; username?: string; first_name?: string; last_name?: string };
-      message?: { text?: string; caption?: string; photo?: Array<{ file_id: string; width: number; height: number }>; contact?: { phone_number: string } };
+      chat?: { id: number; type: string };
+      message?: { text?: string; caption?: string; photo?: Array<{ file_id: string; width: number; height: number }>; contact?: { phone_number: string; user_id?: number }; forward_origin?: unknown; forward_from?: unknown; forward_sender_name?: string };
       telegram: Telegraf['telegram'];
       reply(text: string, extra?: unknown): Promise<unknown>;
       answerCbQuery(text?: string): Promise<unknown>;

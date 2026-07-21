@@ -9,6 +9,7 @@ export interface AppConfig {
   botToken: string;
   adminIds: number[];
   leadsFile: string;
+  applicantIdentitiesFile: string;
   leadWebhookUrl?: string;
   leadWebhookServiceId?: string;
   leadWebhookSecret?: string;
@@ -158,7 +159,7 @@ export function loadConfig(): AppConfig {
     const prohibitedTargets = ['LEAD_WEBHOOK_URL', 'LEAD_WEBHOOK_SERVICE_ID', 'LEAD_WEBHOOK_SECRET', 'ACADEMY_REPORT_BASE_URL', 'AI_API_KEY', 'AI_BASE_URL', 'AI_FALLBACK_API_KEY', 'AI_FALLBACK_BASE_URL', 'OPS_AGGREGATE_PORT', 'OPS_AGGREGATE_SERVICE_ID', 'OPS_AGGREGATE_SECRET', 'SALES_DISCUSSION_CHAT_ID'];
     const presentTarget = prohibitedTargets.find((name) => process.env[name]?.trim());
     if (presentTarget) throw new Error(`${presentTarget} is prohibited in the read-only staging precheck.`);
-    const forbiddenOverrides = ['LEADS_FILE', 'WEBHOOK_FAILED_FILE', 'FOLLOWUPS_FILE', 'TELEGRAM_UPDATES_FILE', 'CHANNEL_POSTS_FILE', 'OPS_ALERTS_FILE', 'CHANNEL_ASSET_ROOT'];
+    const forbiddenOverrides = ['LEADS_FILE', 'APPLICANT_IDENTITIES_FILE', 'WEBHOOK_FAILED_FILE', 'FOLLOWUPS_FILE', 'TELEGRAM_UPDATES_FILE', 'CHANNEL_POSTS_FILE', 'OPS_ALERTS_FILE', 'CHANNEL_ASSET_ROOT'];
     const presentOverride = forbiddenOverrides.find((name) => process.env[name]?.trim());
     if (presentOverride) throw new Error(`${presentOverride} cannot override isolated ACADEMY_* paths in staging.`);
     stagingDataDir = requireStagingPath('ACADEMY_DATA_DIR', process.env.ACADEMY_DATA_DIR, './.staging-data');
@@ -196,6 +197,7 @@ export function loadConfig(): AppConfig {
     botToken,
     adminIds: parseAdminIds(process.env.ADMIN_IDS),
     leadsFile: isStaging ? path.join(stagingDataDir!, 'leads.json') : process.env.LEADS_FILE ?? './data/leads.json',
+    applicantIdentitiesFile: isStaging ? path.join(stagingDataDir!, 'applicant_identities.json') : process.env.APPLICANT_IDENTITIES_FILE ?? './data/applicant_identities.json',
     leadWebhookUrl: process.env.LEAD_WEBHOOK_URL?.trim() || undefined,
     leadWebhookServiceId,
     leadWebhookSecret,

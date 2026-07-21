@@ -30,9 +30,7 @@ Severity uses P0 Critical, P1 High, P2 Medium, and P3 Low. Closed entries requir
 
 | ID | Defect | Required future control | Current disposition |
 |---|---|---|---|
-| P1-06 | Applicant identity relies on Telegram ID and registration consent is not affirmative | Owner-approved person/application identity, versioned consent and deletion/correction controls | Preserved; admissions redesign excluded from Wave 3 |
 | P1-07 | Flat `ADMIN_IDS` grants PII, admissions, approval, publishing, retry and export privileges | Default-deny roles, private-chat enforcement, maker-checker and actor audit | Preserved; RBAC and maker-checker excluded from Wave 3 |
-| P1-08 | Applicant inputs and contact ownership are weakly validated | Bounded canonical validation and owner-approved contact rules; Wave 2 made wizard state durable without redesigning identity | Preserved; identity and input redesign excluded from Wave 3 |
 | P1-09 | Generic webhook and AI endpoints allow unsafe egress configuration | HTTPS-only host allowlists, credential/private-network rejection, signed versioned connectors | Preserved; outbound egress controls excluded from Wave 3 |
 | P1-10 | Database DDL/import runs during application startup | Separate owner-controlled migration command and rollback gate | Preserved; database migration redesign excluded from Wave 3 |
 | P1-11 | Deployment rollback backs up the newly built candidate rather than the previous release | Immutable release directories or verified pre-build snapshot and atomic switch | Preserved; deployment changes deferred |
@@ -44,6 +42,13 @@ Severity uses P0 Critical, P1 High, P2 Medium, and P3 Low. Closed entries requir
 |---|---|---|---|---|
 | STG-01 | P1 | Staging could inherit the production-compatible channel fallback or non-isolated state targets | Explicit staging channel/admin requirements, isolated `ACADEMY_*` paths, inherited-target rejection, visible non-secret `STAGING MODE`, and read-only allowlisted Telegram preflight; `tests/config.test.ts`, `tests/stagingConfig.test.ts`, `tests/stagingTelegramPreflight.test.ts` | Resolved locally; not deployed |
 
+## Wave 4 resolved in the local repair branch
+
+| ID | Severity | Defect | Resolution evidence | Status |
+|---|---|---|---|---|
+| P1-06 | P1 | Applicant identity relied directly on Telegram ID and registration/follow-up consent was not affirmative or purpose-specific | Internal applicant UUID ledger, authoritative private Telegram actor, versioned separate application/outbound/follow-up grants, withdrawal/anonymization, lifecycle and merge-review gates; `tests/applicantIdentity.test.ts` | Resolved locally; not deployed |
+| P1-08 | P1 | Applicant inputs and contact ownership were weakly validated | Self-shared contact ownership match, forwarded/typed/mismatch rejection, normalized phone, bounded Unicode/markup/command/path validation, data minimization and audit redaction; `tests/applicantValidation.test.ts`, `tests/applicantIdentity.test.ts` | Resolved locally; not deployed |
+
 ## Release qualification
 
-Wave 3 completion qualifies only the local publication/follow-up/webhook reliability controls for controlled staging QA. It does not make the bot production-ready or authorize deployment. P1-06 through P1-12 remain release blockers until their own controlled repair and verification gates pass.
+Wave 4 completion qualifies only the local identity, consent, ownership, validation, and minimization controls for controlled staging QA. It does not make the bot production-ready or authorize deployment. P1-07 and P1-09 through P1-12 remain release blockers until their own controlled repair and verification gates pass.

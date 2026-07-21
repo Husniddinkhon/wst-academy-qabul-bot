@@ -13,6 +13,7 @@ export interface LeadMessage {
 
 export interface Lead {
   id: string;
+  applicantId?: string;
   createdAt: string;
   updatedAt: string;
   telegramId: number;
@@ -58,8 +59,12 @@ export interface LeadDraft {
 
 export interface BotSession extends Scenes.WizardSessionData {
   leadDraft?: LeadDraft;
+  applicantId?: string;
+  outboundConsentAccepted?: boolean;
+  pendingConsentIntent?: 'call_request_application' | 'call_request_outbound';
   waitingForCallPhone?: {
     message: string;
+    applicantId?: string;
   };
   source?: LeadSource;
   campaignId?: string;

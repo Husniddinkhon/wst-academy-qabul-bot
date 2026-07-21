@@ -17,6 +17,7 @@ export interface FollowUpAutomationOptions {
   workerId?: string;
   now?: Date;
   canClaim?: () => boolean;
+  canSendNonEssential?: (telegramId: number) => Promise<boolean>;
   runtime?: FollowUpRuntime;
 }
 
@@ -102,6 +103,10 @@ export async function processFollowUps(bot: Telegraf<BotContext>, leadStore: Jso
   const states = await followUpStore.all();
   for (const state of states) {
     if (options.canClaim && !options.canClaim()) break;
+    if (!options.canSendNonEssential || !(await options.canSendNonEssential(state.telegramId))) {
+      await followUpStore.cancelDelivery(state.telegramId, 'Active follow-up and outbound-message consent is required.', now);
+      continue;
+    }
     const lead = await leadStore.getByTelegramId(state.telegramId);
     if (lead && BLOCKED_STATUSES.has(lead.status)) { await followUpStore.cancelDelivery(state.telegramId, 'Lead reached a blocked/terminal admissions status.', now); continue; }
     const task = dueFollowUpTask(state, lead, now);

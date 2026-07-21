@@ -223,6 +223,7 @@ test('staging derives all runtime files from isolated local directories', () => 
   assert.equal(config.isProduction, false);
   assert.equal(config.channelChatId, '-1009876543210');
   assert.equal(config.leadsFile, '.staging-data\\leads.json');
+  assert.equal(config.applicantIdentitiesFile, '.staging-data\\applicant_identities.json');
   assert.equal(config.webhookFailedFile, '.staging-data\\webhook_failed.json');
   assert.equal(config.followupsFile, '.staging-data\\followups.json');
   assert.equal(config.telegramUpdatesFile, '.staging-data\\telegram_updates.json');
@@ -240,6 +241,9 @@ test('staging rejects inherited database and state-path overrides', () => {
   process.env.LEADS_FILE = './data/leads.json';
   assert.throws(() => loadConfig(), /LEADS_FILE cannot override/);
   delete process.env.LEADS_FILE;
+  process.env.APPLICANT_IDENTITIES_FILE = './data/applicant_identities.json';
+  assert.throws(() => loadConfig(), /APPLICANT_IDENTITIES_FILE cannot override/);
+  delete process.env.APPLICANT_IDENTITIES_FILE;
   process.env.LEAD_WEBHOOK_URL = 'https://production.invalid/hook';
   assert.throws(() => loadConfig(), /LEAD_WEBHOOK_URL is prohibited/);
 });

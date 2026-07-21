@@ -9,6 +9,7 @@ import { JsonFollowUpStore, JsonLeadStore } from '../src/storage.js';
 import type { BotContext } from '../src/types.js';
 
 const NOW = new Date('2026-07-21T10:00:00.000Z');
+const CONSENTED = { canSendNonEssential: async () => true } as const;
 
 async function fixture(): Promise<{ followUps: JsonFollowUpStore; leads: JsonLeadStore; cleanup: () => Promise<void> }> {
   const directory = await mkdtemp(path.join(tmpdir(), 'followup-claims-'));
@@ -27,6 +28,18 @@ async function dueState(store: JsonFollowUpStore, telegramId = 1001): Promise<vo
   await store.upsert({ telegramId, startedAt: '2026-07-21T07:00:00.000Z', count: 0 });
 }
 
+test('follow-up delivery fails closed when no consent resolver is installed', async () => {
+  const { followUps, leads, cleanup } = await fixture();
+  try {
+    await dueState(followUps);
+    let sends = 0;
+    const result = await processFollowUps(bot(async () => { sends += 1; return { message_id: 1 }; }), leads, followUps, { now: NOW });
+    assert.equal(sends, 0);
+    assert.equal(result.sent, 0);
+    assert.equal((await followUps.all())[0].deliveryState, 'Cancelled');
+  } finally { await cleanup(); }
+});
+
 test('two concurrent follow-up workers claim and deliver one recipient exactly once', async () => {
   const { followUps, leads, cleanup } = await fixture();
   try {
@@ -34,8 +47,8 @@ test('two concurrent follow-up workers claim and deliver one recipient exactly o
     let sends = 0;
     const sender = bot(async () => { sends += 1; await new Promise((resolve) => setTimeout(resolve, 10)); return { message_id: 1 }; });
     const [left, right] = await Promise.all([
-      processFollowUps(sender, leads, followUps, { now: NOW, workerId: 'worker-a' }),
-      processFollowUps(sender, leads, followUps, { now: NOW, workerId: 'worker-b' }),
+      processFollowUps(sender, leads, followUps, { ...CONSENTED, now: NOW, workerId: 'worker-a' }),
+      processFollowUps(sender, leads, followUps, { ...CONSENTED, now: NOW, workerId: 'worker-b' }),
     ]);
     assert.equal(sends, 1);
     assert.equal(left.sent + right.sent, 1);
@@ -59,7 +72,7 @@ test('restart recovery after send start fails closed and never duplicates the me
     const recovered = await followUps.recoverExpiredDeliveryClaims(new Date(NOW.getTime() + 1_001));
     assert.equal(recovered[0]?.deliveryState, 'Uncertain');
     let sends = 0;
-    await processFollowUps(bot(async () => { sends += 1; return { message_id: 2 }; }), leads, followUps, { now: new Date(NOW.getTime() + 2_000) });
+    await processFollowUps(bot(async () => { sends += 1; return { message_id: 2 }; }), leads, followUps, { ...CONSENTED, now: new Date(NOW.getTime() + 2_000) });
     assert.equal(sends, 0);
   } finally { await cleanup(); }
 });
@@ -69,10 +82,10 @@ test('definite rate limit retries with bounded backoff and then reaches the atte
   try {
     await dueState(followUps);
     const sender = bot(async () => { throw Object.assign(new Error('Too Many Requests'), { response: { error_code: 429, parameters: { retry_after: 1 } } }); });
-    const first = await processFollowUps(sender, leads, followUps, { now: NOW, maxAttempts: 2, retryBaseMs: 1_000, retryMaxMs: 1_000 });
+    const first = await processFollowUps(sender, leads, followUps, { ...CONSENTED, now: NOW, maxAttempts: 2, retryBaseMs: 1_000, retryMaxMs: 1_000 });
     assert.equal(first.retryWait, 1);
     assert.equal((await followUps.all())[0].deliveryState, 'RetryWait');
-    const second = await processFollowUps(sender, leads, followUps, { now: new Date(NOW.getTime() + 1_001), maxAttempts: 2, retryBaseMs: 1_000, retryMaxMs: 1_000 });
+    const second = await processFollowUps(sender, leads, followUps, { ...CONSENTED, now: new Date(NOW.getTime() + 1_001), maxAttempts: 2, retryBaseMs: 1_000, retryMaxMs: 1_000 });
     assert.equal(second.failed, 1);
     const saved = (await followUps.all())[0];
     assert.equal(saved.deliveryState, 'Failed');
@@ -86,7 +99,7 @@ test('permanent Telegram rejection is terminal while an ambiguous transport fail
   try {
     await dueState(first.followUps, 2001);
     const rejected = bot(async () => { throw Object.assign(new Error('Forbidden'), { response: { error_code: 403 } }); });
-    const result = await processFollowUps(rejected, first.leads, first.followUps, { now: NOW });
+    const result = await processFollowUps(rejected, first.leads, first.followUps, { ...CONSENTED, now: NOW });
     assert.equal(result.failed, 1);
     assert.equal((await first.followUps.all())[0].deliveryState, 'Failed');
   } finally { await first.cleanup(); }
@@ -95,7 +108,7 @@ test('permanent Telegram rejection is terminal while an ambiguous transport fail
   try {
     await dueState(second.followUps, 2002);
     const ambiguous = bot(async () => { throw Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }); });
-    const result = await processFollowUps(ambiguous, second.leads, second.followUps, { now: NOW });
+    const result = await processFollowUps(ambiguous, second.leads, second.followUps, { ...CONSENTED, now: NOW });
     assert.equal(result.uncertain, 1);
     assert.equal((await second.followUps.all())[0].deliveryState, 'Uncertain');
   } finally { await second.cleanup(); }
@@ -124,7 +137,7 @@ test('follow-up shutdown drain marks an unfinished send Uncertain', async () => 
     let release!: () => void;
     const startedPromise = new Promise<void>((resolve) => { started = resolve; });
     const blocked = new Promise<void>((resolve) => { release = resolve; });
-    const running = processFollowUps(bot(async () => { started(); await blocked; return { message_id: 9 }; }), leads, followUps, { now: NOW, runtime });
+    const running = processFollowUps(bot(async () => { started(); await blocked; return { message_id: 9 }; }), leads, followUps, { ...CONSENTED, now: NOW, runtime });
     await startedPromise;
     const drain = await runtime.drain(5, NOW);
     assert.equal(drain.timedOut, true);

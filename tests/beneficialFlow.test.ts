@@ -4,9 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { CALCULATOR_BUTTON, LESSONS, LESSON_BUTTON, QUIZ, QUIZ_BUTTON, storageTerabytes, validateCalculatorValue } from '../src/learning.js';
 import { explicitLeadSource, parseStartAttribution, resetSessionForStart } from '../src/startFlow.js';
 import { getTruthfulFallbackAnswer } from '../src/aiAgent.js';
-import { mainMenu, markRegistrationConsent, startInlineMenu } from '../src/registration.js';
+import { mainMenu, markRegistrationFollowUpOptIn, startInlineMenu } from '../src/registration.js';
 import type { BotSession } from '../src/types.js';
 import type { JsonFollowUpStore } from '../src/storage.js';
+import type { JsonApplicantIdentityStore } from '../src/applicantIdentity.js';
 
 test('ad start attribution contains no PII and does not create storage side effects', () => {
   const attribution = parseStartAttribution('/start ads_campaign_a');
@@ -34,10 +35,13 @@ test('start reset escapes stale wizard and learning state', () => {
   assert.equal(session.calculator, undefined);
 });
 
-test('follow-up begins only through explicit registration consent helper', async () => {
+test('follow-up begins only after both outbound and follow-up consent', async () => {
   const calls: unknown[] = [];
   const store = { async upsert(value: unknown) { calls.push(value); } } as JsonFollowUpStore;
-  await markRegistrationConsent(store, 123, '2026-01-01T00:00:00.000Z');
+  const denied = { async maySendFollowUp() { return false; } } as JsonApplicantIdentityStore;
+  assert.equal(await markRegistrationFollowUpOptIn(store, denied, 123, '2026-01-01T00:00:00.000Z'), false);
+  const allowed = { async maySendFollowUp() { return true; } } as JsonApplicantIdentityStore;
+  assert.equal(await markRegistrationFollowUpOptIn(store, allowed, 123, '2026-01-01T00:00:00.000Z'), true);
   assert.deepEqual(calls, [{ telegramId: 123, startedAt: '2026-01-01T00:00:00.000Z', count: 0 }]);
 });
 
@@ -70,7 +74,7 @@ test('public command wiring and ad start contain no automatic lead call', async 
   for (const command of ['help', 'lesson', 'quiz', 'calculator', 'cancel']) assert.match(source, new RegExp(`bot\\.command\\('${command}'`));
   for (const action of ['academy_lesson', 'academy_quiz', 'academy_calculator', 'academy_program', 'academy_price', 'academy_schedule', 'academy_register']) assert.match(source, new RegExp(`bot\\.action\\('${action}'`));
   assert.doesNotMatch(source, /saveTelegramAdsLead/);
-  const startBlock = source.slice(source.indexOf('bot.start'), source.indexOf("bot.hears", source.indexOf('bot.start')));
+  const startBlock = source.slice(source.indexOf('bot.start'), source.indexOf("bot.command('help'", source.indexOf('bot.start')));
   assert.doesNotMatch(startBlock, /store\.|followUpStore|notifyAdmins|deliverLeadWebhook/);
   assert.match(registration, /\^\\\/start/);
   assert.match(registration, /resetSessionForStart/);
@@ -78,10 +82,13 @@ test('public command wiring and ad start contain no automatic lead call', async 
 
 test('operator button starts explicit phone consent flow', async () => {
   const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
-  const start = source.indexOf("bot.hears('Operator bilan bog‘lanish'");
-  const block = source.slice(start, source.indexOf('});', start) + 3);
-  assert.match(block, /waitingForCallPhone/);
-  assert.match(block, /getPhoneRequestAnswer/);
-  assert.match(block, /phoneRequestKeyboard/);
-  assert.doesNotMatch(block, /saveCallRequestLead/);
+  const hearsStart = source.indexOf("bot.hears('Operator bilan bog‘lanish'");
+  const hearsBlock = source.slice(hearsStart, source.indexOf('\n', hearsStart));
+  assert.match(hearsBlock, /startCallRequestConsent/);
+  assert.doesNotMatch(hearsBlock, /saveCallRequestLead/);
+  const helperStart = source.indexOf('async function startCallRequestConsent');
+  const helper = source.slice(helperStart, source.indexOf('async function saveCallRequestLead', helperStart));
+  assert.match(helper, /waitingForCallPhone/);
+  assert.match(helper, /CONSENT_NOTICES\.application/);
+  assert.doesNotMatch(helper, /saveCallRequestLead/);
 });

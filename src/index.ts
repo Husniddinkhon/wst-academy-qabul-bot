@@ -1,11 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { Telegraf, Scenes, session } from 'telegraf';
+import { Telegraf, Scenes, session, Markup } from 'telegraf';
 import { loadConfig, runtimeEnvironmentEvent } from './config.js';
 import { formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
-import { isAdmin, notifyCallRequestLead, notifyHotLead, notifyScoredHotLead, registerAdminCommands } from './admin.js';
+import { isAdmin, notifyCallRequestLead, notifyScoredHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, phoneRequestKeyboard, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
-import { answerWithAiAgent, extractPhoneNumber, getPhoneRequestAnswer, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic, scoreLead } from './aiAgent.js';
+import { answerWithAiAgent, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic, scoreLead } from './aiAgent.js';
 import { configureLeadWebhookRetryPolicy, configureLeadWebhookSigning, deliverLeadWebhook } from './webhook.js';
 import type { BotContext, BotSession, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
@@ -15,7 +15,7 @@ import { JsonChannelPostStore } from './channelPosts.js';
 import { PublisherRuntime } from './channelPublisher.js';
 import { BACK_BUTTON, CALCULATOR_BUTTON, LESSON_BUTTON, MENU_BUTTON, NEXT_BUTTON, QUIZ, QUIZ_BUTTON, lessonKeyboard, lessonText, quizKeyboard, quizText, startCalculator, startLesson, startQuiz, storageTerabytes, validateCalculatorValue } from './learning.js';
 import { explicitLeadSource, parseStartAttribution, resetSessionForStart } from './startFlow.js';
-import { classifyProductLead, getProductSalesAnswer, isProductSalesQuestion, productLeadReason, UNV_CAMPAIGN_ID } from './productSales.js';
+import { getProductSalesAnswer, isProductSalesQuestion } from './productSales.js';
 import { isPermittedSalesConversation, persistSalesConversation } from './salesConversation.js';
 import { startChannelScheduler } from './channelScheduler.js';
 import { createAcademyMetricsLoader } from './salesReporting.js';
@@ -25,14 +25,44 @@ import { JsonOperationalAlertStore } from './operationalAlerts.js';
 import { startLeadSlaEscalation } from './leadSla.js';
 import { startQabulOpsAggregateServer } from './opsAggregateServer.js';
 import { createTelegramUpdateMiddleware, currentUpdateIdempotencyKey, installIdempotentTelegramApi, JsonTelegramSessionStore, runCurrentUpdateEffect, startTelegramUpdateRecovery, TelegramUpdateJournal, telegramUpdateTimestamp } from './telegramUpdates.js';
+import { CONSENT_NOTICES, deriveAuthoritativeTelegramIdentity, JsonApplicantIdentityStore, withdrawnLeadAnonymizationPatch } from './applicantIdentity.js';
+import { maskPhone, validateApplicantMessage } from './applicantValidation.js';
+
+const callApplicationConsentKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('Roziman', 'call_consent_application_accept'), Markup.button.callback('Rad etaman', 'call_consent_application_decline')],
+]);
+const callOutboundConsentKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('Bog\u2018lanishga roziman', 'call_consent_outbound_accept'), Markup.button.callback('Bog\u2018lanmang', 'call_consent_outbound_decline')],
+]);
+
+function authoritativeActor(ctx: BotContext): { telegramUserId: number; telegramChatId: number; username?: string; chatType?: string } | undefined {
+  return deriveAuthoritativeTelegramIdentity(ctx);
+}
+
+function correlationId(ctx: BotContext, label: string): string { return currentUpdateIdempotencyKey(label) ?? `telegram-update:${ctx.update.update_id}:${label}`; }
+
+async function ensureApplicantIdentity(ctx: BotContext, identities: JsonApplicantIdentityStore, label: string) {
+  const actor = authoritativeActor(ctx);
+  if (!actor) return undefined;
+  const result = await identities.identify(actor, correlationId(ctx, label), new Date(telegramUpdateTimestamp(ctx.update)), currentUpdateIdempotencyKey(label));
+  return result.ok ? result.applicant : undefined;
+}
+
+async function startCallRequestConsent(ctx: BotContext, identities: JsonApplicantIdentityStore): Promise<void> {
+  const applicant = await ensureApplicantIdentity(ctx, identities, 'identity:call-request');
+  if (!applicant) { await ctx.reply('Operator so\u2018rovi faqat o\u2018zingizning shaxsiy Telegram chatingizda ishlaydi.', mainMenu()); return; }
+  ctx.session.waitingForCallPhone = { message: 'explicit operator request', applicantId: applicant.applicantId };
+  ctx.session.pendingConsentIntent = 'call_request_application';
+  await ctx.reply([CONSENT_NOTICES.application.text, '', 'Operator so\u2018rovi uchun ham bu rozilik alohida tasdiqlanishi kerak.'].join('\n'), callApplicationConsentKeyboard);
+}
 
 
-async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
+async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, applicantId: string, phone: string, message: string): Promise<void> {
   const from = ctx.from;
   if (!from) return;
 
   const lead: Lead = {
-    id: randomUUID(),
+    id: randomUUID(), applicantId,
     createdAt: telegramUpdateTimestamp(ctx.update),
     updatedAt: telegramUpdateTimestamp(ctx.update),
     telegramId: from.id,
@@ -66,61 +96,13 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
   await notifyCallRequestLead(ctx, adminIds, {
     username: from.username,
     telegramId: from.id,
-    phone,
-    message,
+    phone: maskPhone(phone),
+    message: 'Explicit call request',
     reason: 'User asked for a call.',
   });
 }
 
-async function saveProductSalesLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, message: string): Promise<void> {
-  const from = ctx.from;
-  if (!from) return;
-  const now = telegramUpdateTimestamp(ctx.update);
-  const status = classifyProductLead(message);
-  const phone = extractPhoneNumber(message) ?? '';
-  const lead: Lead = {
-    id: randomUUID(),
-    createdAt: now,
-    updatedAt: now,
-    telegramId: from.id,
-    username: from.username,
-    firstName: from.first_name,
-    lastName: from.last_name,
-    fullName: [from.first_name, from.last_name].filter(Boolean).join(' ') || 'Telegram subscriber',
-    phone,
-    age: '',
-    city: '',
-    workStatus: '',
-    experience: '',
-    preferredTime: '',
-    notes: productLeadReason(message),
-    goal: 'UNV Uho-P1G-M3F4D-EU xaridi',
-    paymentOption: '',
-    status,
-    source: 'channel',
-    campaignId: UNV_CAMPAIGN_ID,
-    intent: 'product_sales',
-    lastMessage: message,
-    messages: [{ text: message, createdAt: now }],
-    operatorNote: '',
-    nextFollowUp: '',
-    paymentStatus: '',
-  };
-
-  const saved = await store.upsert(lead, currentUpdateIdempotencyKey('applicant:product-sales'));
-  await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead, undefined, currentUpdateIdempotencyKey('webhook:product-sales'));
-  if (status === 'Hot') {
-    await notifyHotLead(ctx, adminIds, {
-      username: from.username,
-      telegramId: from.id,
-      phone: phone || undefined,
-      message,
-      reason: productLeadReason(message),
-    });
-  }
-}
-
-async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>, store: JsonLeadStore, failureStore: JsonWebhookFailureStore): Promise<void> {
+async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, identities: JsonApplicantIdentityStore): Promise<void> {
   if (isUnrelatedTopic(message)) {
     await ctx.reply(getUnrelatedTopicAnswer(message), mainMenu());
     return;
@@ -138,6 +120,8 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
 
   const from = ctx.from;
   if (!from) return;
+  const identity = await identities.getByTelegramUserId(from.id);
+  if (!identity || !(await identities.mayProcessApplication(from.id))) return;
   await persistSalesConversation({
     telegramId: from.id,
     username: from.username,
@@ -149,7 +133,7 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
     intent: inferIntent(message),
     source: ctx.session.source,
     campaignId: ctx.session.campaignId,
-    phone: extractPhoneNumber(message),
+    phone: identity.verificationStatus === 'CONTACT_VERIFIED' ? identity.normalizedPhone : undefined,
     now: telegramUpdateTimestamp(ctx.update),
     idempotencyKey: currentUpdateIdempotencyKey('applicant:sales-conversation'),
   }, {
@@ -169,6 +153,8 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
 async function cancelActiveFlow(ctx: BotContext): Promise<void> {
   ctx.session.leadDraft = undefined;
   ctx.session.waitingForCallPhone = undefined;
+  ctx.session.pendingConsentIntent = undefined;
+  ctx.session.outboundConsentAccepted = undefined;
   ctx.session.lessonIndex = undefined;
   ctx.session.quizIndex = undefined;
   ctx.session.quizScore = undefined;
@@ -238,6 +224,7 @@ async function bootstrap(): Promise<void> {
   const postgres = config.databaseUrl ? new PostgresStorage(config.databaseUrl) : undefined;
   if (postgres) await postgres.migrate(config.leadsFile, config.followupsFile);
   const store = postgres ? new PostgresLeadStore(postgres) : new JsonLeadStore(config.leadsFile);
+  const identities = new JsonApplicantIdentityStore(config.applicantIdentitiesFile);
   const failureStore = new JsonWebhookFailureStore(config.webhookFailedFile);
   const followUpStore = postgres ? new PostgresFollowUpStore(postgres) : new JsonFollowUpStore(config.followupsFile);
   const channelPosts = new JsonChannelPostStore(config.channelPostsFile);
@@ -247,7 +234,7 @@ async function bootstrap(): Promise<void> {
     ? startQabulOpsAggregateServer({ port: config.opsAggregatePort, serviceId: config.opsAggregateServiceId, secret: config.opsAggregateSecret, leads: store, alerts: operationalAlerts, followUps: followUpStore, webhookFailures: failureStore })
     : undefined;
   const bot = new Telegraf<BotContext>(config.botToken);
-  const stage = new Scenes.Stage<BotContext>([createRegistrationScene(store, config.adminIds, config.leadWebhookUrl, failureStore, followUpStore)]);
+  const stage = new Scenes.Stage<BotContext>([createRegistrationScene(store, config.adminIds, config.leadWebhookUrl, failureStore, followUpStore, identities)]);
   const updateJournal = new TelegramUpdateJournal(config.telegramUpdatesFile, {
     leaseMs: config.telegramUpdateLeaseMs,
     maxCompletedUpdates: config.telegramUpdateRetention,
@@ -269,6 +256,17 @@ async function bootstrap(): Promise<void> {
   bot.command('quiz', startQuiz);
   bot.command('calculator', startCalculator);
   bot.command('cancel', cancelActiveFlow);
+  bot.command('withdraw_consent', async (ctx) => {
+    const applicant = ctx.from?.id ? await identities.getByTelegramUserId(ctx.from.id) : undefined;
+    if (!applicant) return ctx.reply('Faol ariza roziligi topilmadi.', mainMenu());
+    const result = await identities.withdraw(applicant.applicantId, correlationId(ctx, 'consent:withdraw'), new Date(telegramUpdateTimestamp(ctx.update)), currentUpdateIdempotencyKey('consent:withdraw'));
+    ctx.session.leadDraft = undefined;
+    ctx.session.waitingForCallPhone = undefined;
+    ctx.session.pendingConsentIntent = undefined;
+    await followUpStore.cancelDelivery(ctx.from!.id, 'Applicant withdrew consent.', new Date(telegramUpdateTimestamp(ctx.update)));
+    if (result.ok) await store.updateByTelegramId(ctx.from!.id, withdrawnLeadAnonymizationPatch(), currentUpdateIdempotencyKey('applicant:withdraw-anonymize'));
+    return ctx.reply(result.ok ? 'Roziligingiz qaytarib olindi. Kelajakdagi ixtiyoriy xabarlar bloklandi; minimal audit dalili saqlanadi.' : 'Rozilikni qaytarib olishni xavfsiz yakunlab bo\u2018lmadi.', mainMenu());
+  });
   bot.action('academy_lesson', async (ctx) => { await ctx.answerCbQuery(); await startLesson(ctx); });
   bot.action('academy_quiz', async (ctx) => { await ctx.answerCbQuery(); await startQuiz(ctx); });
   bot.action('academy_calculator', async (ctx) => { await ctx.answerCbQuery(); await startCalculator(ctx); });
@@ -276,6 +274,41 @@ async function bootstrap(): Promise<void> {
   bot.action('academy_price', async (ctx) => { await ctx.answerCbQuery(); await ctx.reply(formatPriceInfo(), mainMenu()); });
   bot.action('academy_schedule', async (ctx) => { await ctx.answerCbQuery(); await ctx.reply(formatLocationAndSchedule(), mainMenu()); });
   bot.action('academy_register', async (ctx) => { await ctx.answerCbQuery(); await ctx.scene.enter(REGISTRATION_SCENE_ID); });
+  bot.action('call_consent_application_accept', async (ctx) => {
+    await ctx.answerCbQuery();
+    const applicant = await ensureApplicantIdentity(ctx, identities, 'identity:call-consent');
+    if (!applicant || ctx.session.pendingConsentIntent !== 'call_request_application') return ctx.reply('Rozilik sessiyasi topilmadi. Operator so\u2018rovini qayta boshlang.', mainMenu());
+    const result = await identities.recordConsent(applicant.applicantId, CONSENT_NOTICES.application, true, true, 'telegram_callback', correlationId(ctx, 'consent:call-application'), new Date(telegramUpdateTimestamp(ctx.update)), currentUpdateIdempotencyKey('consent:call-application'));
+    if (!result.ok) return ctx.reply('Ariza roziligini xavfsiz saqlab bo\u2018lmadi.', mainMenu());
+    ctx.session.pendingConsentIntent = 'call_request_outbound';
+    return ctx.reply([CONSENT_NOTICES.outbound.text, 'Bu tanlov ariza ma\u2019lumotlarini saqlash roziligidan alohida.'].join('\n'), callOutboundConsentKeyboard);
+  });
+  bot.action('call_consent_application_decline', async (ctx) => {
+    await ctx.answerCbQuery();
+    const applicant = await ensureApplicantIdentity(ctx, identities, 'identity:call-decline');
+    if (applicant) await identities.recordConsent(applicant.applicantId, CONSENT_NOTICES.application, false, true, 'telegram_callback', correlationId(ctx, 'consent:call-application-decline'), new Date(telegramUpdateTimestamp(ctx.update)), currentUpdateIdempotencyKey('consent:call-application-decline'));
+    ctx.session.waitingForCallPhone = undefined;
+    ctx.session.pendingConsentIntent = undefined;
+    return ctx.reply('Rozilik berilmadi. Telefon yoki ariza ma\u2019lumotlari yig\u2018ilmadi.', mainMenu());
+  });
+  bot.action('call_consent_outbound_accept', async (ctx) => {
+    await ctx.answerCbQuery();
+    const applicant = await ensureApplicantIdentity(ctx, identities, 'identity:call-outbound');
+    if (!applicant || ctx.session.pendingConsentIntent !== 'call_request_outbound' || !ctx.session.waitingForCallPhone) return ctx.reply('Rozilik sessiyasi topilmadi. Operator so\u2018rovini qayta boshlang.', mainMenu());
+    const result = await identities.recordConsent(applicant.applicantId, CONSENT_NOTICES.outbound, true, true, 'telegram_callback', correlationId(ctx, 'consent:call-outbound'), new Date(telegramUpdateTimestamp(ctx.update)), currentUpdateIdempotencyKey('consent:call-outbound'));
+    if (!result.ok) return ctx.reply('Bog\u2018lanish roziligini xavfsiz saqlab bo\u2018lmadi.', mainMenu());
+    ctx.session.pendingConsentIntent = undefined;
+    ctx.session.waitingForCallPhone.applicantId = applicant.applicantId;
+    return ctx.reply('Pastdagi tugma orqali faqat o\u2018zingizga tegishli Telegram kontaktini yuboring.', phoneRequestKeyboard());
+  });
+  bot.action('call_consent_outbound_decline', async (ctx) => {
+    await ctx.answerCbQuery();
+    const applicant = await ensureApplicantIdentity(ctx, identities, 'identity:call-outbound-decline');
+    if (applicant) await identities.recordConsent(applicant.applicantId, CONSENT_NOTICES.outbound, false, true, 'telegram_callback', correlationId(ctx, 'consent:call-outbound-decline'), new Date(telegramUpdateTimestamp(ctx.update)), currentUpdateIdempotencyKey('consent:call-outbound-decline'));
+    ctx.session.waitingForCallPhone = undefined;
+    ctx.session.pendingConsentIntent = undefined;
+    return ctx.reply('Bog\u2018lanish roziligi berilmadi. Operator so\u2018rovi yuborilmadi.', mainMenu());
+  });
   bot.hears(LESSON_BUTTON, startLesson);
   bot.hears(QUIZ_BUTTON, startQuiz);
   bot.hears(CALCULATOR_BUTTON, startCalculator);
@@ -285,10 +318,7 @@ async function bootstrap(): Promise<void> {
   bot.hears('Kurs haqida', (ctx) => ctx.reply(formatCourseIntro(), mainMenu()));
   bot.hears('Manzil va jadval', (ctx) => ctx.reply(formatLocationAndSchedule(), mainMenu()));
   bot.hears('Maxfiylik', (ctx) => ctx.reply(formatPrivacyInfo(), mainMenu()));
-  bot.hears('Operator bilan bog‘lanish', async (ctx) => {
-    ctx.session.waitingForCallPhone = { message: 'Operator bilan bog‘lanish' };
-    await ctx.reply(getPhoneRequestAnswer('Operator bilan bog‘lanish'), phoneRequestKeyboard());
-  });
+  bot.hears('Operator bilan bog‘lanish', (ctx) => startCallRequestConsent(ctx, identities));
 
   const channelMediaPolicy = { assetRoot: config.channelAssetRoot, allowedHttpsHosts: config.channelImageHosts };
   const academyMetrics = config.academyReportBaseUrl && config.leadWebhookServiceId && config.leadWebhookSecret
@@ -319,65 +349,52 @@ async function bootstrap(): Promise<void> {
   });
 
   bot.on('contact', async (ctx) => {
-    const phone = ctx.message?.contact?.phone_number;
-    if (!ctx.session.waitingForCallPhone || !phone) return;
-
-    const originalMessage = ctx.session.waitingForCallPhone.message;
+    const pending = ctx.session.waitingForCallPhone;
+    const contact = ctx.message?.contact;
+    const actor = authoritativeActor(ctx);
+    if (!pending?.applicantId || !contact || !actor) return;
+    const forwarded = Boolean(ctx.message?.forward_origin || ctx.message?.forward_from || ctx.message?.forward_sender_name);
+    const verified = await identities.attachTelegramContact(pending.applicantId, contact.phone_number, { senderUserId: actor.telegramUserId, contactUserId: contact.user_id, forwarded }, correlationId(ctx, 'identity:call-contact'), new Date(telegramUpdateTimestamp(ctx.update)), currentUpdateIdempotencyKey('identity:call-contact'));
+    if (!verified.ok) return ctx.reply(verified.reason === 'conflict' ? 'Bu telefon boshqa identifikatsiya bilan bog‘langan. Avtomatik birlashtirish bloklandi.' : 'Kontakt egasi Telegram yuboruvchisi bilan mos kelmadi. Faqat o‘zingizning kontakt tugmangizdan foydalaning.', phoneRequestKeyboard());
+    if (!verified.applicant.normalizedPhone) return ctx.reply('Telefon raqamini tasdiqlab bo‘lmadi.', phoneRequestKeyboard());
+    if (!(await identities.mayProcessApplication(actor.telegramUserId)) || !(await identities.hasConsent(actor.telegramUserId, CONSENT_NOTICES.outbound))) return ctx.reply('Operator so‘rovi uchun ariza va bog‘lanish roziliklari faol bo‘lishi kerak.', mainMenu());
     ctx.session.waitingForCallPhone = undefined;
-    await saveCallRequestLead(ctx, store, failureStore, config.adminIds, config.leadWebhookUrl, phone, originalMessage);
-    await ctx.reply('Rahmat. Telefon raqamingiz qabul qilindi. Operatorimiz tez orada siz bilan bog‘lanadi.', mainMenu());
+    await saveCallRequestLead(ctx, store, failureStore, config.adminIds, config.leadWebhookUrl, pending.applicantId, verified.applicant.normalizedPhone, pending.message);
+    await ctx.reply('Rahmat. Tasdiqlangan telefon raqamingiz qabul qilindi. Roziligingizga muvofiq operator bog‘lanishi mumkin.', mainMenu());
   });
 
   bot.on('text', async (ctx) => {
-    const message = ctx.message?.text?.trim();
+    const rawMessage = ctx.message?.text?.trim();
 
-    if (!message || message.startsWith('/') || ctx.scene.current) return;
+    if (!rawMessage || rawMessage.startsWith('/') || ctx.scene.current) return;
+    const validatedMessage = validateApplicantMessage(rawMessage);
+    if (!validatedMessage.ok) return ctx.reply(validatedMessage.message, mainMenu());
+    const message = validatedMessage.value;
     const telegramContext = ctx as unknown as { chat?: { id: number; type: string }; from?: { is_bot?: boolean } };
     if (telegramContext.chat?.type !== 'private') {
       if (telegramContext.chat?.id !== config.salesDiscussionChatId || telegramContext.from?.is_bot || !isProductSalesQuestion(message)) return;
-      await saveProductSalesLead(ctx, store, failureStore, config.adminIds, config.leadWebhookUrl, message);
       await ctx.reply(getProductSalesAnswer(message, config.operatorUsername));
       return;
     }
     if (await handleLearningText(ctx, message)) return;
 
     if (ctx.session.waitingForCallPhone) {
-      const phone = extractPhoneNumber(message);
-
-      if (!phone) {
-        if (isCallRequestCancel(message)) {
-          ctx.session.waitingForCallPhone = undefined;
-          await ctx.reply('Mayli. Kerak bo‘lsa, pastdagi menyudan kurs haqida so‘rashingiz yoki ro‘yxatdan o‘tishingiz mumkin.', mainMenu());
-          return;
-        }
-
+      if (isCallRequestCancel(message)) {
         ctx.session.waitingForCallPhone = undefined;
-        await answerSalesAgent(ctx, message, config, store, failureStore);
+        ctx.session.pendingConsentIntent = undefined;
+        await ctx.reply('Mayli. Operator so‘rovi bekor qilindi.', mainMenu());
         return;
       }
-
-      const originalMessage = ctx.session.waitingForCallPhone.message;
-      ctx.session.waitingForCallPhone = undefined;
-      await saveCallRequestLead(ctx, store, failureStore, config.adminIds, config.leadWebhookUrl, phone, originalMessage);
-      await ctx.reply('Rahmat. Telefon raqamingiz qabul qilindi. Operatorimiz tez orada siz bilan bog‘lanadi.', mainMenu());
+      await ctx.reply('Yozilgan raqam telefon egaligini tasdiqlamaydi. Pastdagi tugma orqali faqat o‘zingizning Telegram kontaktingizni yuboring.', phoneRequestKeyboard());
       return;
     }
 
     if (isCallRequest(message)) {
-      const phone = extractPhoneNumber(message);
-
-      if (!phone) {
-        ctx.session.waitingForCallPhone = { message };
-        await ctx.reply(getPhoneRequestAnswer(message), mainMenu());
-        return;
-      }
-
-      await saveCallRequestLead(ctx, store, failureStore, config.adminIds, config.leadWebhookUrl, phone, message);
-      await ctx.reply('Rahmat. Telefon raqamingiz qabul qilindi. Operatorimiz tez orada siz bilan bog‘lanadi.', mainMenu());
+      await startCallRequestConsent(ctx, identities);
       return;
     }
 
-    await answerSalesAgent(ctx, message, config, store, failureStore);
+    await answerSalesAgent(ctx, message, config, store, failureStore, identities);
   });
 
   bot.catch((error, ctx) => {
@@ -393,6 +410,7 @@ async function bootstrap(): Promise<void> {
     { command: 'quiz', description: 'CCTV bilim testi' },
     { command: 'calculator', description: 'Kamera xotirasini hisoblash' },
     { command: 'cancel', description: 'Joriy amalni bekor qilish' },
+    { command: 'withdraw_consent', description: 'Ariza roziligini qaytarib olish' },
   ];
   const adminCommands = [
     { command: 'start', description: 'Botni boshlash va kurs haqida maʼlumot' },
@@ -434,6 +452,7 @@ async function bootstrap(): Promise<void> {
     maxAttempts: config.followUpMaxAttempts,
     retryBaseMs: config.followUpRetryBaseMs,
     retryMaxMs: config.followUpRetryMaxMs,
+    canSendNonEssential: (telegramId) => identities.maySendFollowUp(telegramId),
   });
   const leadSlaTimer = startLeadSlaEscalation(store, operationalAlerts, bot.telegram, config.adminIds);
   const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);

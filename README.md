@@ -8,7 +8,8 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - `/start ads_<campaign>` keeps campaign attribution only in the private in-memory session; opening an ad never creates a lead, notification, webhook, or follow-up
 - Public `/help`, `/lesson`, `/quiz`, `/calculator`, and `/cancel` commands work without registration or phone sharing
 - Three-module CCTV mini-lesson, five-question session-only quiz, and bounded camera-storage calculator
-- Step-by-step registration flow
+- Step-by-step Uzbek-first registration with separate application, outbound-message, and follow-up consent
+- Durable internal applicant identity, verified self-shared Telegram contacts, conflict review, withdrawal, and `/withdraw_consent`
 - Admin notifications for every new lead
 - `/id` command to discover Telegram user ID
 - Admin commands:
@@ -31,6 +32,7 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - Optional n8n-compatible lead webhook delivery
 - Environment-based configuration; no bot token in code
 - Campaign attribution is attached only after explicit registration or an operator call request with a submitted phone number
+- Typed, forwarded, or third-party phone contacts never establish ownership; duplicate identities and phones fail closed without an automatic merge
 - Bot destination long and short descriptions synchronized automatically on every startup
 - Persistent channel draft and audited publish workflow for `@wstacademy_uz`
 
@@ -70,6 +72,7 @@ Edit `.env`:
 BOT_TOKEN=your-real-bot-token
 ADMIN_IDS=123456789,987654321
 LEADS_FILE=./data/leads.json
+APPLICANT_IDENTITIES_FILE=./data/applicant_identities.json
 WEBHOOK_FAILED_FILE=./data/webhook_failed.json
 FOLLOWUPS_FILE=./data/followups.json
 TELEGRAM_UPDATES_FILE=./data/telegram_updates.json
@@ -113,7 +116,7 @@ npm start
 
 ## Data storage
 
-Leads are stored locally in `data/leads.json` by default. You can change this path with `LEADS_FILE`. Failed webhook deliveries and follow-up state default to `data/webhook_failed.json` and `data/followups.json`, configurable with `WEBHOOK_FAILED_FILE` and `FOLLOWUPS_FILE`. Telegram update claims, recoverable raw updates, and durable session state share `data/telegram_updates.json`, allowing one atomic commit per handled update. Keep it private; inactive sessions expire after 30 days.
+Leads are stored locally in `data/leads.json` by default. The separate applicant identity and consent ledger defaults to `data/applicant_identities.json`; override it only with `APPLICANT_IDENTITIES_FILE`. Failed webhook deliveries and follow-up state default to `data/webhook_failed.json` and `data/followups.json`, configurable with `WEBHOOK_FAILED_FILE` and `FOLLOWUPS_FILE`. Telegram update claims, recoverable raw updates, and durable session state share `data/telegram_updates.json`, allowing one atomic commit per handled update. Keep every state file private; inactive sessions expire after 30 days.
 
 The `data/*.json` files are ignored by Git to avoid committing personal lead data.
 
@@ -130,6 +133,8 @@ dead-letter controls are documented in
 The secret-safe Wave 3.1B staging identity and channel-permission check is documented in
 [`docs/wave-3.1b-staging-precheck.md`](docs/wave-3.1b-staging-precheck.md). Its
 `npm run staging:precheck` command never polls or sends, edits, deletes, or publishes a Telegram message.
+Wave 4 applicant identity, purpose-specific consent, contact ownership, validation, minimization, migration, and withdrawal controls are documented in
+[`docs/wave-4-applicant-identity-consent.md`](docs/wave-4-applicant-identity-consent.md).
 
 ## Deployment notes
 
