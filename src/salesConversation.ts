@@ -16,6 +16,7 @@ export interface SalesConversationInput {
   campaignId?: string;
   phone?: string;
   now?: string;
+  idempotencyKey?: string;
 }
 
 export interface SalesConversationDependencies {
@@ -83,7 +84,7 @@ export async function persistSalesConversation(input: SalesConversationInput, de
 
   let saved: LeadUpsertResult;
   try {
-    saved = await dependencies.store.upsert(lead);
+    saved = await dependencies.store.upsert(lead, input.idempotencyKey);
   } catch (error) {
     console.error('AI sales lead persistence failed:', safeError(error));
     return { errors: ['storage'] };
@@ -91,7 +92,7 @@ export async function persistSalesConversation(input: SalesConversationInput, de
 
   const errors: SalesConversationResult['errors'] = [];
   try {
-    await (dependencies.deliverWebhook ?? deliverLeadWebhook)(dependencies.leadWebhookUrl, dependencies.failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead);
+    await (dependencies.deliverWebhook ?? deliverLeadWebhook)(dependencies.leadWebhookUrl, dependencies.failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead, undefined, input.idempotencyKey ? `${input.idempotencyKey}:webhook` : undefined);
   } catch (error) {
     console.error('AI sales lead webhook failed:', safeError(error));
     errors.push('webhook');

@@ -7,7 +7,7 @@ import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './sto
 import { createRegistrationScene, mainMenu, phoneRequestKeyboard, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
 import { answerWithAiAgent, extractPhoneNumber, getPhoneRequestAnswer, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic, scoreLead } from './aiAgent.js';
 import { configureLeadWebhookSigning, deliverLeadWebhook } from './webhook.js';
-import type { BotContext, Lead, LeadSource } from './types.js';
+import type { BotContext, BotSession, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
 import { startDailyReport } from './dailyReport.js';
 import { PostgresFollowUpStore, PostgresLeadStore, PostgresStorage } from './postgres.js';
@@ -22,6 +22,7 @@ import { getBotLaunchOptions } from './botLaunch.js';
 import { JsonOperationalAlertStore } from './operationalAlerts.js';
 import { startLeadSlaEscalation } from './leadSla.js';
 import { startQabulOpsAggregateServer } from './opsAggregateServer.js';
+import { createTelegramUpdateMiddleware, currentUpdateIdempotencyKey, installIdempotentTelegramApi, JsonTelegramSessionStore, runCurrentUpdateEffect, startTelegramUpdateRecovery, TelegramUpdateJournal, telegramUpdateTimestamp } from './telegramUpdates.js';
 
 
 async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, phone: string, message: string): Promise<void> {
@@ -30,8 +31,8 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
 
   const lead: Lead = {
     id: randomUUID(),
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    createdAt: telegramUpdateTimestamp(ctx.update),
+    updatedAt: telegramUpdateTimestamp(ctx.update),
     telegramId: from.id,
     username: from.username,
     firstName: from.first_name,
@@ -57,8 +58,8 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
     paymentStatus: '',
   };
 
-  const saved = await store.upsert(lead);
-  await deliverLeadWebhook(leadWebhookUrl, failureStore, 'call_request', saved.lead);
+  const saved = await store.upsert(lead, currentUpdateIdempotencyKey('applicant:call-request'));
+  await deliverLeadWebhook(leadWebhookUrl, failureStore, 'call_request', saved.lead, undefined, currentUpdateIdempotencyKey('webhook:call-request'));
 
   await notifyCallRequestLead(ctx, adminIds, {
     username: from.username,
@@ -72,7 +73,7 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
 async function saveProductSalesLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, message: string): Promise<void> {
   const from = ctx.from;
   if (!from) return;
-  const now = new Date().toISOString();
+  const now = telegramUpdateTimestamp(ctx.update);
   const status = classifyProductLead(message);
   const phone = extractPhoneNumber(message) ?? '';
   const lead: Lead = {
@@ -104,8 +105,8 @@ async function saveProductSalesLead(ctx: BotContext, store: JsonLeadStore, failu
     paymentStatus: '',
   };
 
-  const saved = await store.upsert(lead);
-  await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead);
+  const saved = await store.upsert(lead, currentUpdateIdempotencyKey('applicant:product-sales'));
+  await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead, undefined, currentUpdateIdempotencyKey('webhook:product-sales'));
   if (status === 'Hot') {
     await notifyHotLead(ctx, adminIds, {
       username: from.username,
@@ -125,7 +126,7 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
 
   let result;
   try {
-    result = await answerWithAiAgent(message, config.ai, { actorId: ctx.from?.id ? String(ctx.from.id) : undefined });
+    result = await runCurrentUpdateEffect('ai:sales-answer', () => answerWithAiAgent(message, config.ai, { actorId: ctx.from?.id ? String(ctx.from.id) : undefined }));
   } catch (error) {
     console.error('AI agent failed:', error instanceof Error ? error.message : error);
     result = { answer: getTruthfulFallbackAnswer(message), ...scoreLead(message) };
@@ -147,6 +148,8 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
     source: ctx.session.source,
     campaignId: ctx.session.campaignId,
     phone: extractPhoneNumber(message),
+    now: telegramUpdateTimestamp(ctx.update),
+    idempotencyKey: currentUpdateIdempotencyKey('applicant:sales-conversation'),
   }, {
     store,
     failureStore,
@@ -232,8 +235,14 @@ async function bootstrap(): Promise<void> {
     : undefined;
   const bot = new Telegraf<BotContext>(config.botToken);
   const stage = new Scenes.Stage<BotContext>([createRegistrationScene(store, config.adminIds, config.leadWebhookUrl, failureStore, followUpStore)]);
+  const updateJournal = new TelegramUpdateJournal(config.telegramUpdatesFile, {
+    leaseMs: config.telegramUpdateLeaseMs,
+    maxCompletedUpdates: config.telegramUpdateRetention,
+  });
 
-  bot.use(session());
+  installIdempotentTelegramApi(bot.telegram);
+  bot.use(createTelegramUpdateMiddleware(updateJournal));
+  bot.use(session<BotSession, BotContext>({ store: new JsonTelegramSessionStore(updateJournal) }));
   bot.use(stage.middleware());
 
   bot.start(async (ctx) => {
@@ -287,7 +296,7 @@ async function bootstrap(): Promise<void> {
     const photos = ctx.message?.photo ?? [];
     const photoFileId = photos[photos.length - 1]?.file_id;
     if (!photoFileId || text.length < 20 || text.length > 1024) return ctx.reply('Photo caption 20–1024 belgi bo‘lishi kerak.');
-    const post = await channelPosts.create(text, photoFileId, ctx.from?.id);
+    const post = await channelPosts.create(text, photoFileId, ctx.from?.id, currentUpdateIdempotencyKey('channel:photo-draft'));
     return ctx.reply(`Rasmli draft saqlandi: ${post.id}\nYuborish: /channel_publish ${post.id}`);
   });
 
@@ -406,12 +415,12 @@ async function bootstrap(): Promise<void> {
     ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelPublishStaleMs, channelMediaPolicy, { store: operationalAlerts, adminIds: config.adminIds })
     : undefined;
 
-  await bot.launch(getBotLaunchOptions(config));
-  console.log('WST Academy qabul bot is running.');
+  let telegramUpdateRecoveryTimer: NodeJS.Timeout | undefined;
 
   const shutdown = async (signal: NodeJS.Signals) => {
     console.log(`Received ${signal}. Stopping bot...`);
     clearInterval(followUpTimer);
+    if (telegramUpdateRecoveryTimer) clearInterval(telegramUpdateRecoveryTimer);
     clearInterval(leadSlaTimer);
     if (dailyReportTimer) clearInterval(dailyReportTimer);
     if (channelSchedulerTimer) clearInterval(channelSchedulerTimer);
@@ -423,6 +432,10 @@ async function bootstrap(): Promise<void> {
 
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+  await bot.launch(getBotLaunchOptions(config), () => {
+    telegramUpdateRecoveryTimer = startTelegramUpdateRecovery(bot, updateJournal);
+    console.log('WST Academy qabul bot is running.');
+  });
 }
 
 bootstrap().catch((error) => {

@@ -29,6 +29,8 @@ export interface ChannelPost {
   photoFileId?: string;
   photoSource?: ChannelImageSource;
   contentKey?: string;
+  requestKey?: string;
+  actionKeys?: string[];
 }
 
 export type ChannelImageSource =
@@ -36,16 +38,18 @@ export type ChannelImageSource =
   | { kind: 'https_url'; value: string };
 
 interface ChannelPostDatabase { posts: ChannelPost[] }
-export type ClaimResult = { ok: true; post: ChannelPost; attemptId: string } | { ok: false; reason: 'not_found' | 'not_publishable'; post?: ChannelPost };
+export type ClaimResult = { ok: true; post: ChannelPost; attemptId: string; replayed?: boolean } | { ok: false; reason: 'not_found' | 'not_publishable'; post?: ChannelPost };
 export type MutationResult = { ok: true; post: ChannelPost } | { ok: false; reason: 'not_found' | 'not_allowed'; post?: ChannelPost };
 
 export class JsonChannelPostStore {
   private mutationQueue: Promise<void> = Promise.resolve();
   constructor(private readonly filePath: string) {}
 
-  async create(text: string, photoFileId?: string, createdBy?: number): Promise<ChannelPost> {
+  async create(text: string, photoFileId?: string, createdBy?: number, idempotencyKey?: string): Promise<ChannelPost> {
     return this.mutate((db) => {
-      const post: ChannelPost = { id: randomUUID().slice(0, 8), text, photoFileId, status: 'Draft', createdAt: new Date().toISOString(), createdBy, attempts: 0 };
+      const existing = idempotencyKey ? db.posts.find((item) => item.requestKey === idempotencyKey) : undefined;
+      if (existing) return normalizePost(existing);
+      const post: ChannelPost = { id: randomUUID().slice(0, 8), text, photoFileId, status: 'Draft', createdAt: new Date().toISOString(), createdBy, attempts: 0, requestKey: idempotencyKey, actionKeys: [] };
       db.posts.push(post);
       return post;
     });
@@ -63,14 +67,15 @@ export class JsonChannelPostStore {
   async all(): Promise<ChannelPost[]> { return (await this.read()).posts; }
   async last(limit = 10): Promise<ChannelPost[]> { return (await this.read()).posts.slice(-limit).reverse(); }
 
-  async schedule(id: string, scheduledAt: string, adminId: number, campaignId?: string): Promise<MutationResult> {
+  async schedule(id: string, scheduledAt: string, adminId: number, campaignId?: string, idempotencyKey?: string): Promise<MutationResult> {
     return this.mutate((db) => {
       const index = db.posts.findIndex((post) => post.id === id);
       if (index < 0) return { ok: false, reason: 'not_found' } as const;
       const current = normalizePost(db.posts[index]);
+      if (idempotencyKey && current.actionKeys?.includes(idempotencyKey)) return { ok: true, post: current } as const;
       if (!['Draft', 'Cancelled', 'Failed'].includes(current.status)) return { ok: false, reason: 'not_allowed', post: current } as const;
       const now = new Date().toISOString();
-      const post: ChannelPost = { ...current, status: 'Scheduled', scheduledAt, scheduledBy: adminId, approvedAt: now, approvedBy: adminId, campaignId: campaignId || undefined, cancelledAt: undefined, cancelledBy: undefined, lastError: undefined, failedAt: undefined };
+      const post: ChannelPost = { ...current, status: 'Scheduled', scheduledAt, scheduledBy: adminId, approvedAt: now, approvedBy: adminId, campaignId: campaignId || undefined, cancelledAt: undefined, cancelledBy: undefined, lastError: undefined, failedAt: undefined, actionKeys: appendActionKey(current.actionKeys, idempotencyKey) };
       db.posts[index] = post;
       return { ok: true, post } as const;
     });
@@ -90,25 +95,27 @@ export class JsonChannelPostStore {
     });
   }
 
-  async cancel(id: string, adminId: number): Promise<MutationResult> {
+  async cancel(id: string, adminId: number, idempotencyKey?: string): Promise<MutationResult> {
     return this.mutate((db) => {
       const index = db.posts.findIndex((post) => post.id === id);
       if (index < 0) return { ok: false, reason: 'not_found' } as const;
       const current = normalizePost(db.posts[index]);
+      if (idempotencyKey && current.actionKeys?.includes(idempotencyKey)) return { ok: true, post: current } as const;
       if (current.status !== 'Scheduled') return { ok: false, reason: 'not_allowed', post: current } as const;
-      const post: ChannelPost = { ...current, status: 'Cancelled', cancelledAt: new Date().toISOString(), cancelledBy: adminId };
+      const post: ChannelPost = { ...current, status: 'Cancelled', cancelledAt: new Date().toISOString(), cancelledBy: adminId, actionKeys: appendActionKey(current.actionKeys, idempotencyKey) };
       db.posts[index] = post;
       return { ok: true, post } as const;
     });
   }
 
-  async claimForPublishing(id: string, publisherId: number, retryFailed = false): Promise<ClaimResult> {
+  async claimForPublishing(id: string, publisherId: number, retryFailed = false, idempotencyKey?: string): Promise<ClaimResult> {
     return this.mutate((db) => {
       const index = db.posts.findIndex((post) => post.id === id);
       if (index < 0) return { ok: false, reason: 'not_found' } as const;
       const current = normalizePost(db.posts[index]);
+      if (idempotencyKey && current.actionKeys?.includes(idempotencyKey) && current.publishAttemptId) return { ok: true, post: current, attemptId: current.publishAttemptId, replayed: true } as const;
       if (!(current.status === 'Draft' || (retryFailed && current.status === 'Failed'))) return { ok: false, reason: 'not_publishable', post: current } as const;
-      return claim(db, index, current, publisherId, new Date());
+      return claim(db, index, { ...current, actionKeys: appendActionKey(current.actionKeys, idempotencyKey) }, publisherId, new Date());
     });
   }
 
@@ -167,4 +174,5 @@ function claim(db: ChannelPostDatabase, index: number, current: ChannelPost, pub
   db.posts[index] = post;
   return { ok: true, post, attemptId };
 }
-function normalizePost(post: ChannelPost): ChannelPost { return { ...post, attempts: Number.isInteger(post.attempts) ? post.attempts : (post.status === 'Published' || post.status === 'Failed' ? 1 : 0) }; }
+function normalizePost(post: ChannelPost): ChannelPost { return { ...post, attempts: Number.isInteger(post.attempts) ? post.attempts : (post.status === 'Published' || post.status === 'Failed' ? 1 : 0), actionKeys: Array.isArray(post.actionKeys) ? post.actionKeys : [] }; }
+function appendActionKey(keys: string[] | undefined, key: string | undefined): string[] { const next = [...(keys ?? [])]; if (key && !next.includes(key)) next.push(key); return next.slice(-100); }

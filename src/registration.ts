@@ -7,6 +7,7 @@ import type { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from '
 import type { BotContext, Lead } from './types.js';
 import { CALCULATOR_BUTTON, LESSON_BUTTON, QUIZ_BUTTON } from './learning.js';
 import { parseStartAttribution, resetSessionForStart } from './startFlow.js';
+import { currentUpdateIdempotencyKey, telegramUpdateTimestamp } from './telegramUpdates.js';
 
 const registerButton = Markup.keyboard([
   [LESSON_BUTTON, QUIZ_BUTTON],
@@ -31,8 +32,8 @@ export function startInlineMenu() {
   ]);
 }
 
-export async function markRegistrationConsent(followUpStore: JsonFollowUpStore, telegramId: number, startedAt = new Date().toISOString()): Promise<void> {
-  await followUpStore.upsert({ telegramId, startedAt, count: 0 });
+export async function markRegistrationConsent(followUpStore: JsonFollowUpStore, telegramId: number, startedAt = new Date().toISOString(), idempotencyKey?: string): Promise<void> {
+  await followUpStore.upsert({ telegramId, startedAt, count: 0 }, idempotencyKey);
 }
 
 export function createRegistrationScene(store: JsonLeadStore, adminIds: number[], leadWebhookUrl: string | undefined, failureStore: JsonWebhookFailureStore, followUpStore: JsonFollowUpStore): Scenes.WizardScene<BotContext> {
@@ -40,7 +41,7 @@ export function createRegistrationScene(store: JsonLeadStore, adminIds: number[]
     REGISTRATION_SCENE_ID,
     async (ctx) => {
       ctx.scene.session.leadDraft = {};
-      if (ctx.from?.id) await markRegistrationConsent(followUpStore, ctx.from.id);
+      if (ctx.from?.id) await markRegistrationConsent(followUpStore, ctx.from.id, telegramUpdateTimestamp(ctx.update), currentUpdateIdempotencyKey('followup:registration-start'));
       await ctx.reply('Ro‘yxatdan o‘tishni boshladingiz. Ism-familiyangizni kiriting:', cancelButton);
       return ctx.wizard.next();
     },
@@ -55,11 +56,11 @@ export function createRegistrationScene(store: JsonLeadStore, adminIds: number[]
       const draft = { ...ctx.scene.session.leadDraft, notes: getText(ctx) };
       const from = ctx.from;
       if (!from || !draft.fullName || !draft.phone || !draft.age || !draft.city || !draft.experience || !draft.preferredTime) { await ctx.reply('Ma’lumotlar to‘liq emas. /start orqali qayta urinib ko‘ring.', mainMenu()); return ctx.scene.leave(); }
-      const now = new Date().toISOString();
+      const now = telegramUpdateTimestamp(ctx.update);
       const lead: Lead = { id: randomUUID(), createdAt: now, updatedAt: now, telegramId: from.id, username: from.username, firstName: from.first_name, lastName: from.last_name, fullName: draft.fullName, phone: draft.phone, age: draft.age, city: draft.city, workStatus: '', experience: draft.experience, preferredTime: draft.preferredTime, notes: /^yo['‘’]?q$/i.test(draft.notes ?? '') ? undefined : draft.notes, goal: '', paymentOption: '', status: 'RegistrationCompleted', source: ctx.session.source ?? 'registration', campaignId: ctx.session.campaignId, intent: 'registration', lastMessage: draft.notes ?? 'registration completed', messages: [{ text: draft.notes ?? 'registration completed', createdAt: now }], operatorNote: '', nextFollowUp: '', paymentStatus: '' };
-      const saved = await store.upsert(lead);
-      await followUpStore.upsert({ telegramId: from.id, startedAt: saved.lead.createdAt, count: 0, registrationCompleted: true });
-      await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead);
+      const saved = await store.upsert(lead, currentUpdateIdempotencyKey('applicant:registration-complete'));
+      await followUpStore.upsert({ telegramId: from.id, startedAt: saved.lead.createdAt, count: 0, registrationCompleted: true }, currentUpdateIdempotencyKey('followup:registration-complete'));
+      await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead, undefined, currentUpdateIdempotencyKey('webhook:registration-complete'));
       await notifyAdmins(ctx, adminIds, saved.lead);
       await ctx.reply(['Arizangiz qabul qilindi.', 'Operator tez orada siz bilan bog‘lanadi.', `Operator: ${courseInfo.operator}`, `Telefon: ${courseInfo.phone}`].join('\n'), mainMenu());
       return ctx.scene.leave();

@@ -1,11 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
 import type { FollowUpState, Lead, LeadStatus, LeadWebhookEvent } from './types.js';
 
-interface LeadDatabase { leads: Lead[]; }
-export interface FailedWebhookPayload { event: LeadWebhookEvent; lead: Lead; failedAt: string; attempts: number; lastError?: string; }
+interface StoredLeadEffect { kind: 'upsert' | 'update'; result: LeadUpsertResult | Lead | undefined }
+interface LeadDatabase { leads: Lead[]; effects: Record<string, StoredLeadEffect>; }
+export interface FailedWebhookPayload { event: LeadWebhookEvent; lead: Lead; failedAt: string; attempts: number; lastError?: string; idempotencyKey?: string; outcomeUncertain?: boolean; retryToken?: string; retryClaimedAt?: string; }
 interface FailedWebhookDatabase { payloads: FailedWebhookPayload[]; }
-interface FollowUpDatabase { followups: FollowUpState[]; }
+interface FollowUpDatabase { followups: FollowUpState[]; effectKeys: string[]; }
 
 export const STATUS_PRIORITY: Record<LeadStatus, number> = { New: 1, Warm: 2, Hot: 3, RegistrationCompleted: 4, CallRequested: 5, OperatorContacted: 6, Paid: 7, Rejected: 0 };
 const AI_SCORE_PRIORITY = { COLD: 1, WARM: 2, HOT: 3 } as const;
@@ -15,12 +17,15 @@ export interface FunnelEventMetrics { available: boolean; leadCreationsTracked: 
 export class JsonLeadStore {
   constructor(private readonly filePath: string) {}
 
-  async upsert(lead: Lead): Promise<LeadUpsertResult> {
+  async upsert(lead: Lead, idempotencyKey?: string): Promise<LeadUpsertResult> {
     return withFileLock(this.filePath, async () => {
     const db = await this.readDatabase();
+    const prior = idempotencyKey ? db.effects[idempotencyKey] : undefined;
+    if (prior?.kind === 'upsert') return prior.result as LeadUpsertResult;
     const index = db.leads.findIndex((item) => item.telegramId === lead.telegramId);
     if (index === -1) {
       db.leads.push(lead);
+      if (idempotencyKey) rememberLeadEffect(db, idempotencyKey, { kind: 'upsert', result: { lead, created: true, hotEscalated: lead.aiLeadScore === 'HOT' } });
       await this.writeDatabase(db);
       return { lead, created: true, hotEscalated: lead.aiLeadScore === 'HOT' };
     }
@@ -28,22 +33,30 @@ export class JsonLeadStore {
     const existing = normalizeLead(db.leads[index]);
     const merged = mergeLeadRecords(existing, lead);
     db.leads[index] = merged;
+    const result = { lead: merged, created: false, hotEscalated: lead.aiLeadScore === 'HOT' && existing.aiLeadScore !== 'HOT' };
+    if (idempotencyKey) rememberLeadEffect(db, idempotencyKey, { kind: 'upsert', result });
     await this.writeDatabase(db);
-    return { lead: merged, created: false, hotEscalated: lead.aiLeadScore === 'HOT' && existing.aiLeadScore !== 'HOT' };
+    return result;
     });
   }
 
   async add(lead: Lead): Promise<void> { await this.upsert(lead); }
   async getByTelegramId(telegramId: number): Promise<Lead | undefined> { return (await this.all()).find((lead) => lead.telegramId === telegramId); }
 
-  async updateByTelegramId(telegramId: number, patch: Partial<Lead>): Promise<Lead | undefined> {
+  async updateByTelegramId(telegramId: number, patch: Partial<Lead>, idempotencyKey?: string): Promise<Lead | undefined> {
     return withFileLock(this.filePath, async () => {
     const db = await this.readDatabase();
+    const prior = idempotencyKey ? db.effects[idempotencyKey] : undefined;
+    if (prior?.kind === 'update') return prior.result as Lead | undefined;
     const index = db.leads.findIndex((lead) => lead.telegramId === telegramId);
-    if (index === -1) return undefined;
+    if (index === -1) {
+      if (idempotencyKey) { rememberLeadEffect(db, idempotencyKey, { kind: 'update', result: undefined }); await this.writeDatabase(db); }
+      return undefined;
+    }
     const existing = normalizeLead(db.leads[index]);
     const updated = { ...existing, ...patch, telegramId, updatedAt: new Date().toISOString() };
     db.leads[index] = updated;
+    if (idempotencyKey) rememberLeadEffect(db, idempotencyKey, { kind: 'update', result: updated });
     await this.writeDatabase(db);
     return updated;
     });
@@ -65,25 +78,62 @@ export class JsonLeadStore {
     return [headers.join(','), ...exportLeads.map((lead) => headers.map((h) => csvEscape(String(lead[h] ?? ''))).join(','))].join('\n');
   }
   async getFunnelEventMetrics(_from: Date, _toExclusive: Date): Promise<FunnelEventMetrics> { return { available: false, leadCreationsTracked: 0, hotEscalations: 0, registrations: 0 }; }
-  private async readDatabase(): Promise<LeadDatabase> { const parsed = await readJson<LeadDatabase>(this.filePath, { leads: [] }); return { leads: Array.isArray(parsed.leads) ? parsed.leads : [] }; }
+  private async readDatabase(): Promise<LeadDatabase> { const parsed = await readJson<Partial<LeadDatabase>>(this.filePath, { leads: [], effects: {} }); return { leads: Array.isArray(parsed.leads) ? parsed.leads : [], effects: parsed.effects && typeof parsed.effects === 'object' ? parsed.effects : {} }; }
   private async writeDatabase(db: LeadDatabase): Promise<void> { await atomicWriteJson(this.filePath, db); }
 }
 
 export class JsonWebhookFailureStore {
   constructor(private readonly filePath: string) {}
-  async add(payload: Omit<FailedWebhookPayload, 'failedAt' | 'attempts'>): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); db.payloads.push({ ...payload, failedAt: new Date().toISOString(), attempts: 1 }); await atomicWriteJson(this.filePath, db); }); }
+  async add(payload: Omit<FailedWebhookPayload, 'failedAt' | 'attempts'>): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); if (payload.idempotencyKey && db.payloads.some((item) => item.idempotencyKey === payload.idempotencyKey)) return; db.payloads.push({ ...payload, failedAt: new Date().toISOString(), attempts: 1 }); await atomicWriteJson(this.filePath, db); }); }
   async all(): Promise<FailedWebhookPayload[]> { return (await this.read()).payloads; }
   async replace(payloads: FailedWebhookPayload[]): Promise<void> { await withFileLock(this.filePath, async () => atomicWriteJson(this.filePath, { payloads })); }
+  async claimRetryable(now = new Date()): Promise<FailedWebhookPayload[]> {
+    return withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      const claimed: FailedWebhookPayload[] = [];
+      for (const item of db.payloads) {
+        if (item.outcomeUncertain) continue;
+        if (item.retryToken) {
+          const claimedAt = item.retryClaimedAt ? new Date(item.retryClaimedAt).getTime() : 0;
+          if (claimedAt <= now.getTime() - 10 * 60_000) {
+            item.outcomeUncertain = true;
+            item.lastError = 'Webhook retry ownership expired after an interrupted attempt; external outcome requires evidence review.';
+            item.retryToken = undefined;
+            item.retryClaimedAt = undefined;
+          }
+          continue;
+        }
+        item.retryToken = randomUUID();
+        item.retryClaimedAt = now.toISOString();
+        claimed.push({ ...item });
+      }
+      await atomicWriteJson(this.filePath, db);
+      return claimed;
+    });
+  }
+  async finishRetry(claimed: FailedWebhookPayload, outcome: { sent: true } | { sent: false; error: string; outcomeUncertain: boolean }, now = new Date()): Promise<void> {
+    await withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      const index = db.payloads.findIndex((item) => item.retryToken === claimed.retryToken && item.retryToken !== undefined);
+      if (index < 0) throw new Error('Webhook retry ownership lost.');
+      if (outcome.sent) db.payloads.splice(index, 1);
+      else db.payloads[index] = { ...db.payloads[index], attempts: db.payloads[index].attempts + 1, failedAt: now.toISOString(), lastError: outcome.error, outcomeUncertain: outcome.outcomeUncertain, retryToken: undefined, retryClaimedAt: undefined };
+      await atomicWriteJson(this.filePath, db);
+    });
+  }
   private async read(): Promise<FailedWebhookDatabase> { const parsed = await readJson<FailedWebhookDatabase>(this.filePath, { payloads: [] }); return { payloads: Array.isArray(parsed.payloads) ? parsed.payloads : [] }; }
 }
 
 export class JsonFollowUpStore {
   constructor(private readonly filePath: string) {}
-  async ensure(state: FollowUpState): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); if (db.followups.some((f) => f.telegramId === state.telegramId)) return; db.followups.push(state); await atomicWriteJson(this.filePath, db); }); }
-  async upsert(state: FollowUpState): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); const i = db.followups.findIndex((f) => f.telegramId === state.telegramId); if (i === -1) db.followups.push(state); else db.followups[i] = { ...db.followups[i], ...state }; await atomicWriteJson(this.filePath, db); }); }
+  async ensure(state: FollowUpState, idempotencyKey?: string): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); if (idempotencyKey && db.effectKeys.includes(idempotencyKey)) return; if (!db.followups.some((f) => f.telegramId === state.telegramId)) db.followups.push(state); if (idempotencyKey) rememberKey(db.effectKeys, idempotencyKey); await atomicWriteJson(this.filePath, db); }); }
+  async upsert(state: FollowUpState, idempotencyKey?: string): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); if (idempotencyKey && db.effectKeys.includes(idempotencyKey)) return; const i = db.followups.findIndex((f) => f.telegramId === state.telegramId); if (i === -1) db.followups.push(state); else db.followups[i] = { ...db.followups[i], ...state }; if (idempotencyKey) rememberKey(db.effectKeys, idempotencyKey); await atomicWriteJson(this.filePath, db); }); }
   async all(): Promise<FollowUpState[]> { return (await this.read()).followups; }
-  private async read(): Promise<FollowUpDatabase> { const parsed = await readJson<FollowUpDatabase>(this.filePath, { followups: [] }); return { followups: Array.isArray(parsed.followups) ? parsed.followups : [] }; }
+  private async read(): Promise<FollowUpDatabase> { const parsed = await readJson<Partial<FollowUpDatabase>>(this.filePath, { followups: [], effectKeys: [] }); return { followups: Array.isArray(parsed.followups) ? parsed.followups : [], effectKeys: Array.isArray(parsed.effectKeys) ? parsed.effectKeys : [] }; }
 }
+
+function rememberLeadEffect(db: LeadDatabase, key: string, effect: StoredLeadEffect): void { db.effects[key] = effect; const keys = Object.keys(db.effects); for (const old of keys.slice(0, Math.max(0, keys.length - 10_000))) delete db.effects[old]; }
+function rememberKey(keys: string[], key: string): void { keys.push(key); if (keys.length > 10_000) keys.splice(0, keys.length - 10_000); }
 
 function normalizeLead(lead: Lead): Lead { return { ...lead, updatedAt: lead.updatedAt ?? lead.createdAt, city: lead.city ?? (lead as unknown as { district?: string }).district ?? '', workStatus: lead.workStatus ?? '', goal: lead.goal ?? '', paymentOption: lead.paymentOption ?? '', status: normalizeStatus(lead.status), source: lead.source ?? 'unknown', campaignId: lead.campaignId ?? '', studentStatus: lead.studentStatus ?? 'NotEnrolled', agentActionCount: lead.agentActionCount ?? 0, lastAgentAction: lead.lastAgentAction ?? '', lastAgentAt: lead.lastAgentAt ?? '', intent: lead.intent ?? '', lastMessage: lead.lastMessage ?? lead.notes ?? '', messages: lead.messages ?? [], operatorNote: lead.operatorNote ?? '', nextFollowUp: lead.nextFollowUp ?? '', paymentStatus: lead.paymentStatus ?? '' }; }
 export function mergeLeadRecords(existingLead: Lead, incomingLead: Lead): Lead {

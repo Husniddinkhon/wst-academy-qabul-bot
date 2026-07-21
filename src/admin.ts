@@ -9,23 +9,24 @@ import { buildSalesReport, formatSalesReport, parseSalesReportRange, type SalesR
 import { buildOperationalReport, formatOperationalReport } from './operationalReport.js';
 import type { JsonOperationalAlertStore } from './operationalAlerts.js';
 import { formatTashkentSchedule, parseTashkentSchedule } from './channelScheduler.js';
+import { currentUpdateIdempotencyKey, telegramUpdateTimestamp, withTelegramCallLabel } from './telegramUpdates.js';
 
 const HOT_LEAD_COOLDOWN_MS = 30 * 60 * 1000;
 const lastHotLeadAtByTelegramId = new Map<number, number>();
 
 export function isAdmin(ctx: BotContext, adminIds: number[]): boolean { const id = ctx.from?.id; return Boolean(id && adminIds.includes(id)); }
-export async function notifyAdmins(ctx: BotContext, adminIds: number[], lead: import('./types.js').Lead): Promise<void> { if (adminIds.length === 0) return; await Promise.allSettled(adminIds.map((adminId) => ctx.telegram.sendMessage(adminId, formatLead(lead)))); }
+export async function notifyAdmins(ctx: BotContext, adminIds: number[], lead: import('./types.js').Lead): Promise<void> { if (adminIds.length === 0) return; await Promise.allSettled(adminIds.map((adminId) => withTelegramCallLabel('admin:new-lead-notification', () => ctx.telegram.sendMessage(adminId, formatLead(lead))))); }
 export interface HotLeadNotification { username?: string; telegramId?: number; phone?: string; message: string; reason: string; }
-export async function notifyHotLead(ctx: BotContext, adminIds: number[], lead: HotLeadNotification): Promise<void> { if (adminIds.length === 0 || !canNotifyHotLead(lead.telegramId)) return; await Promise.allSettled(adminIds.map((adminId) => ctx.telegram.sendMessage(adminId, ['🔥 Hot lead detected',`Username: ${lead.username ? `@${lead.username}` : '—'}`,`Telegram ID: ${lead.telegramId ?? '—'}`,lead.phone ? `Phone: ${lead.phone}` : undefined,`Message: ${lead.message}`,`Reason: ${lead.reason}`].filter(Boolean).join('\n')))); }
+export async function notifyHotLead(ctx: BotContext, adminIds: number[], lead: HotLeadNotification): Promise<void> { if (adminIds.length === 0 || !canNotifyHotLead(lead.telegramId)) return; await Promise.allSettled(adminIds.map((adminId) => withTelegramCallLabel('admin:hot-lead-notification', () => ctx.telegram.sendMessage(adminId, ['🔥 Hot lead detected',`Username: ${lead.username ? `@${lead.username}` : '—'}`,`Telegram ID: ${lead.telegramId ?? '—'}`,lead.phone ? `Phone: ${lead.phone}` : undefined,`Message: ${lead.message}`,`Reason: ${lead.reason}`].filter(Boolean).join('\n'))))); }
 export async function notifyScoredHotLead(ctx: BotContext, adminIds: number[], lead: HotLeadNotification): Promise<void> {
   if (adminIds.length === 0) return;
   const text = ['🔥 Hot lead escalation',`Username: ${lead.username ? `@${lead.username}` : '—'}`,`Telegram ID: ${lead.telegramId ?? '—'}`,lead.phone ? `Phone: ${lead.phone}` : undefined,`Message: ${lead.message}`,`Reason: ${lead.reason}`].filter(Boolean).join('\n');
-  const results = await Promise.allSettled(adminIds.map((adminId) => ctx.telegram.sendMessage(adminId, text)));
+  const results = await Promise.allSettled(adminIds.map((adminId) => withTelegramCallLabel('admin:lead-escalation-notification', () => ctx.telegram.sendMessage(adminId, text))));
   const failed = results.filter((result) => result.status === 'rejected');
   if (failed.length > 0) console.error(`Hot lead escalation notification failed for ${failed.length}/${results.length} admins.`);
   if (failed.length === results.length) throw new Error('Hot lead escalation notification failed for every admin.');
 }
-export async function notifyCallRequestLead(ctx: BotContext, adminIds: number[], lead: HotLeadNotification): Promise<void> { if (adminIds.length === 0 || !canNotifyHotLead(lead.telegramId)) return; await Promise.allSettled(adminIds.map((adminId) => ctx.telegram.sendMessage(adminId, ['🔥 Call request lead',`Username: ${lead.username ? `@${lead.username}` : '—'}`,`Telegram ID: ${lead.telegramId ?? '—'}`,`Phone: ${lead.phone ?? '—'}`,`Message: ${lead.message}`,`Reason: ${lead.reason}`].join('\n')))); }
+export async function notifyCallRequestLead(ctx: BotContext, adminIds: number[], lead: HotLeadNotification): Promise<void> { if (adminIds.length === 0 || !canNotifyHotLead(lead.telegramId)) return; await Promise.allSettled(adminIds.map((adminId) => withTelegramCallLabel('admin:call-request-notification', () => ctx.telegram.sendMessage(adminId, ['🔥 Call request lead',`Username: ${lead.username ? `@${lead.username}` : '—'}`,`Telegram ID: ${lead.telegramId ?? '—'}`,`Phone: ${lead.phone ?? '—'}`,`Message: ${lead.message}`,`Reason: ${lead.reason}`].join('\n'))))); }
 function canNotifyHotLead(telegramId?: number): boolean { if (!telegramId) return true; const now = Date.now(); const last = lastHotLeadAtByTelegramId.get(telegramId) ?? 0; if (now - last < HOT_LEAD_COOLDOWN_MS) return false; lastHotLeadAtByTelegramId.set(telegramId, now); return true; }
 
 const VALID_STATUSES: LeadStatus[] = ['New', 'Warm', 'Hot', 'RegistrationCompleted', 'CallRequested', 'OperatorContacted', 'Paid', 'Rejected'];
@@ -104,6 +105,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       `LEAD_WEBHOOK_SIGNING: ${process.env.LEAD_WEBHOOK_SERVICE_ID && process.env.LEAD_WEBHOOK_SECRET ? 'configured' : 'disabled'}`,
       `WEBHOOK_FAILED_FILE: ${envValue('WEBHOOK_FAILED_FILE', './data/webhook_failed.json')}`,
       `FOLLOWUPS_FILE: ${envValue('FOLLOWUPS_FILE', './data/followups.json')}`,
+      `TELEGRAM_UPDATES_FILE: ${envValue('TELEGRAM_UPDATES_FILE', './data/telegram_updates.json')}`,
       `NODE_ENV: ${envValue('NODE_ENV', 'not set')}`,
       `AI_ENABLED: ${envValue('AI_ENABLED', 'false')}`,
       `AI_PROVIDER: ${envValue('AI_PROVIDER', 'openai_compatible')}`,
@@ -180,7 +182,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     if (!(await guard(ctx))) return;
     const text = commandText(ctx).replace(/^\/channel_draft(?:@\w+)?\s*/i, '').trim();
     if (text.length < 20 || text.length > 4000) return ctx.reply('Post matni 20–4000 belgi bo‘lishi kerak.');
-    const post = await channelPosts.create(text, undefined, ctx.from?.id);
+    const post = await channelPosts.create(text, undefined, ctx.from?.id, currentUpdateIdempotencyKey('channel:text-draft'));
     return ctx.reply(`Draft saqlandi: ${post.id}\n\n${post.text}\n\nYuborish: /channel_publish ${post.id}`);
   });
 
@@ -196,7 +198,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     const scheduledAt = date && time ? parseTashkentSchedule(`${date} ${time}`) : undefined;
     if (!id || !scheduledAt || !ctx.from?.id) return ctx.reply('Format: /channel_schedule <id> <YYYY-MM-DD> <HH:mm> [campaign]\nVaqt Asia/Tashkent bo‘yicha.');
     if (new Date(scheduledAt) <= new Date()) return ctx.reply('Rejalangan vaqt kelajakda bo‘lishi kerak.');
-    const result = await channelPosts.schedule(id, scheduledAt, ctx.from.id, campaignId);
+    const result = await channelPosts.schedule(id, scheduledAt, ctx.from.id, campaignId, currentUpdateIdempotencyKey(`channel:schedule:${id}`));
     if (result.ok) return ctx.reply(`Post tasdiqlandi va rejalandi: ${result.post.id}\n${formatTashkentSchedule(new Date(result.post.scheduledAt!))} Asia/Tashkent`);
     return ctx.reply(result.reason === 'not_found' ? 'Post topilmadi.' : `Bu postni rejalab bo‘lmaydi. Holat: ${result.post?.status ?? 'unknown'}.`);
   });
@@ -205,7 +207,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     if (!(await guard(ctx))) return;
     const id = commandText(ctx).split(/\s+/)[1];
     if (!id || !ctx.from?.id) return ctx.reply('Format: /channel_cancel <id>');
-    const result = await channelPosts.cancel(id, ctx.from.id);
+    const result = await channelPosts.cancel(id, ctx.from.id, currentUpdateIdempotencyKey(`channel:cancel:${id}`));
     if (result.ok) return ctx.reply(`Reja bekor qilindi: ${result.post.id}`);
     return ctx.reply(result.reason === 'not_found' ? 'Post topilmadi.' : `Bekor qilib bo‘lmaydi. Holat: ${result.post?.status ?? 'unknown'}.`);
   });
@@ -227,7 +229,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     if (!(await guard(ctx))) return;
     const id = commandText(ctx).split(/\s+/)[1]?.trim();
     if (!id || !ctx.from?.id) return ctx.reply(`Format: /channel_${retryFailed ? 'retry' : 'publish'} <id>`);
-    const result = await publishChannelPost(channelPosts, bot.telegram, channelChatId, id, ctx.from.id, retryFailed, channelMediaPolicy);
+    const result = await publishChannelPost(channelPosts, bot.telegram, channelChatId, id, ctx.from.id, retryFailed, channelMediaPolicy, currentUpdateIdempotencyKey(`channel:${retryFailed ? 'retry' : 'publish'}:${id}`));
     if (result.ok) return ctx.reply(`Kanalga yuborildi: ${result.post.id}, message ${result.post.publishedMessageId}`);
     if (result.reason === 'send_failed') {
       console.error('Channel publish failed:', result.error);
@@ -299,11 +301,11 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     const telegramId = Number(idText);
     const studentStatus = STUDENT_STATUSES.find((status) => status.toLowerCase() === statusText?.toLowerCase());
     if (!Number.isSafeInteger(telegramId) || !studentStatus) return ctx.reply(`Format: /set_student <telegram_id> <status>\nStatuslar: ${STUDENT_STATUSES.join(', ')}`);
-    const lead = await store.updateByTelegramId(telegramId, { studentStatus });
-    if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead);
+    const lead = await store.updateByTelegramId(telegramId, { studentStatus }, currentUpdateIdempotencyKey('admin:set-student'));
+    if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead, undefined, currentUpdateIdempotencyKey('webhook:set-student'));
     return ctx.reply(lead ? `Student status: ${studentStatus}` : 'Lead topilmadi.');
   });
-  bot.command('export_csv', async (ctx) => { if (!(await guard(ctx))) return; const csv = await store.toCsv(); return ctx.replyWithDocument(Input.fromBuffer(Buffer.from(csv, 'utf8'), `wst-leads-${new Date().toISOString().slice(0, 10)}.csv`)); });
+  bot.command('export_csv', async (ctx) => { if (!(await guard(ctx))) return; const csv = await store.toCsv(); return ctx.replyWithDocument(Input.fromBuffer(Buffer.from(csv, 'utf8'), `wst-leads-${telegramUpdateTimestamp(ctx.update).slice(0, 10)}.csv`)); });
   bot.command('retry_webhooks', async (ctx) => { if (!(await guard(ctx))) return; const r = await retryFailedWebhooks(leadWebhookUrl, failureStore); return ctx.reply(`Webhook retry: attempted ${r.attempted}, sent ${r.sent}, remaining ${r.remaining}`); });
   bot.command('lead', async (ctx) => { if (!(await guard(ctx))) return; const id = Number(commandText(ctx).split(/\s+/)[1]); const lead = Number.isSafeInteger(id) ? await store.getByTelegramId(id) : undefined; return ctx.reply(lead ? formatLead(lead) : 'Lead topilmadi.'); });
   bot.command('set_status', async (ctx) => {
@@ -316,9 +318,9 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       return ctx.reply(`Format: /set_status <telegram_id> <status>\nStatuslar: ${VALID_STATUSES.join(', ')}`);
     }
 
-    const lead = await store.updateByTelegramId(telegramId, { status });
-    if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead);
+    const lead = await store.updateByTelegramId(telegramId, { status }, currentUpdateIdempotencyKey('admin:set-status'));
+    if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead, undefined, currentUpdateIdempotencyKey('webhook:set-status'));
     return ctx.reply(lead ? `Status yangilandi: ${lead.status}` : 'Lead topilmadi.');
   });
-  bot.command('operator_note', async (ctx) => { if (!(await guard(ctx))) return; const match = commandText(ctx).match(/^\/operator_note\s+(\d+)\s+([\s\S]+)/); const lead = match ? await store.updateByTelegramId(Number(match[1]), { operatorNote: match[2] }) : undefined; if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead); return ctx.reply(lead ? 'Operator note saqlandi.' : 'Format: /operator_note <telegram_id> <note>'); });
+  bot.command('operator_note', async (ctx) => { if (!(await guard(ctx))) return; const match = commandText(ctx).match(/^\/operator_note\s+(\d+)\s+([\s\S]+)/); const targetId = match ? Number(match[1]) : undefined; const lead = match ? await store.updateByTelegramId(targetId!, { operatorNote: match[2] }, currentUpdateIdempotencyKey('admin:operator-note')) : undefined; if (lead) await deliverLeadWebhook(leadWebhookUrl, failureStore, 'lead_updated', lead, undefined, currentUpdateIdempotencyKey('webhook:operator-note')); return ctx.reply(lead ? 'Operator note saqlandi.' : 'Format: /operator_note <telegram_id> <note>'); });
 }

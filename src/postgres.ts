@@ -33,15 +33,27 @@ export class PostgresStorage {
 
 export class PostgresLeadStore extends JsonLeadStore {
   constructor(private readonly pg: PostgresStorage) { super('/dev/null'); }
-  override async upsert(lead: Lead): Promise<LeadUpsertResult> {
+  override async upsert(lead: Lead, idempotencyKey?: string): Promise<LeadUpsertResult> {
     const client = await this.pg.pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [lead.telegramId]);
       const current = await client.query('SELECT payload FROM leads WHERE telegram_id=$1 FOR UPDATE', [lead.telegramId]);
       const created = current.rowCount === 0;
       const existing = current.rows[0]?.payload as Lead | undefined;
       const merged = existing ? mergeLeadRecords(existing, lead) : normalizeLead(lead);
       const hotEscalated = lead.aiLeadScore === 'HOT' && existing?.aiLeadScore !== 'HOT';
+      if (idempotencyKey) {
+        const result = { lead: merged, created, hotEscalated };
+        const claimed = await client.query('INSERT INTO conversation_events(telegram_id,event_type,payload,idempotency_key) VALUES($1,$2,$3,$4) ON CONFLICT(idempotency_key) DO NOTHING RETURNING id', [lead.telegramId, 'telegram_update_claim', { result }, idempotencyKey]);
+        if (claimed.rowCount === 0) {
+          const priorClaim = await client.query('SELECT payload FROM conversation_events WHERE idempotency_key=$1', [idempotencyKey]);
+          await client.query('COMMIT');
+          const prior = priorClaim.rows[0]?.payload?.result as LeadUpsertResult | undefined;
+          if (!prior?.lead) throw new Error(`Idempotent lead result missing for ${idempotencyKey}.`);
+          return prior;
+        }
+      }
       await writeLead(client, merged);
       await client.query('INSERT INTO conversation_events(telegram_id,event_type,payload,idempotency_key) VALUES($1,$2,$3,$4) ON CONFLICT(idempotency_key) DO NOTHING', [lead.telegramId, created ? 'lead_created' : 'lead_updated', { message: lead.lastMessage, status: merged.status, intent: lead.intent, ai_score: lead.aiLeadScore, ai_reason: lead.aiLeadReason }, `${lead.telegramId}:${lead.updatedAt}:${lead.lastMessage}`]);
       await client.query('COMMIT');
@@ -50,8 +62,25 @@ export class PostgresLeadStore extends JsonLeadStore {
   }
   override async add(lead: Lead): Promise<void> { await this.upsert(lead); }
   override async getByTelegramId(id: number): Promise<Lead | undefined> { const r = await this.pg.pool.query('SELECT payload FROM leads WHERE telegram_id=$1', [id]); return r.rows[0]?.payload as Lead | undefined; }
-  override async updateByTelegramId(id: number, patch: Partial<Lead>): Promise<Lead | undefined> {
-    const client = await this.pg.pool.connect(); try { await client.query('BEGIN'); const r = await client.query('SELECT payload FROM leads WHERE telegram_id=$1 FOR UPDATE',[id]); if (!r.rowCount) { await client.query('ROLLBACK'); return undefined; } const lead=normalizeLead({...(r.rows[0].payload as Lead),...patch,telegramId:id,updatedAt:new Date().toISOString()}); await writeLead(client,lead); await client.query('COMMIT'); return lead; } catch(e){await client.query('ROLLBACK');throw e;} finally{client.release();}
+  override async updateByTelegramId(id: number, patch: Partial<Lead>, idempotencyKey?: string): Promise<Lead | undefined> {
+    const client = await this.pg.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [id]);
+      const current = await client.query('SELECT payload FROM leads WHERE telegram_id=$1 FOR UPDATE', [id]);
+      const result = current.rowCount ? normalizeLead({ ...(current.rows[0].payload as Lead), ...patch, telegramId: id, updatedAt: new Date().toISOString() }) : undefined;
+      if (idempotencyKey) {
+        const claimed = await client.query('INSERT INTO conversation_events(telegram_id,event_type,payload,idempotency_key) VALUES($1,$2,$3,$4) ON CONFLICT(idempotency_key) DO NOTHING RETURNING id', [id, 'telegram_admin_claim', { result: result ?? null }, idempotencyKey]);
+        if (!claimed.rowCount) {
+          const prior = await client.query('SELECT payload FROM conversation_events WHERE idempotency_key=$1', [idempotencyKey]);
+          await client.query('COMMIT');
+          return (prior.rows[0]?.payload?.result as Lead | null | undefined) ?? undefined;
+        }
+      }
+      if (result) await writeLead(client, result);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
   override async all(): Promise<Lead[]> { const r=await this.pg.pool.query('SELECT payload FROM leads ORDER BY created_at DESC'); return r.rows.map(x=>x.payload as Lead); }
   override async today(now=new Date()): Promise<Lead[]> { const start=new Date(now);start.setHours(0,0,0,0);const end=new Date(start);end.setDate(end.getDate()+1);return (await this.all()).filter(x=>new Date(x.createdAt)>=start&&new Date(x.createdAt)<end); }
@@ -86,9 +115,24 @@ export class PostgresLeadStore extends JsonLeadStore {
 
 export class PostgresFollowUpStore extends JsonFollowUpStore {
   constructor(private readonly pg: PostgresStorage) { super('/dev/null'); }
-  override async ensure(s:FollowUpState){await this.pg.pool.query('INSERT INTO followups(telegram_id,payload,count,last_sent_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[s.telegramId,s,s.count,s.lastSentAt??null]);}
-  override async upsert(s:FollowUpState){const c=await this.pg.pool.connect();try{await c.query('BEGIN');const r=await c.query('SELECT payload FROM followups WHERE telegram_id=$1 FOR UPDATE',[s.telegramId]);const merged={...(r.rows[0]?.payload??{}),...s};await c.query('INSERT INTO followups(telegram_id,payload,count,last_sent_at,updated_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(telegram_id) DO UPDATE SET payload=EXCLUDED.payload,count=EXCLUDED.count,last_sent_at=EXCLUDED.last_sent_at,updated_at=now()',[s.telegramId,merged,merged.count,merged.lastSentAt??null]);await c.query('COMMIT');}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}
+  override async ensure(s: FollowUpState, idempotencyKey?: string): Promise<void> { await this.writeIdempotently(s, idempotencyKey, true); }
+  override async upsert(s: FollowUpState, idempotencyKey?: string): Promise<void> { await this.writeIdempotently(s, idempotencyKey, false); }
   override async all():Promise<FollowUpState[]>{const r=await this.pg.pool.query('SELECT payload FROM followups');return r.rows.map(x=>x.payload as FollowUpState);}
+  private async writeIdempotently(s: FollowUpState, idempotencyKey: string | undefined, ensureOnly: boolean): Promise<void> {
+    const client = await this.pg.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1::bigint)', [s.telegramId]);
+      const current = await client.query('SELECT payload FROM followups WHERE telegram_id=$1 FOR UPDATE', [s.telegramId]);
+      const merged = ensureOnly && current.rowCount ? current.rows[0].payload as FollowUpState : { ...(current.rows[0]?.payload ?? {}), ...s };
+      if (idempotencyKey) {
+        const claimed = await client.query('INSERT INTO conversation_events(telegram_id,event_type,payload,idempotency_key) VALUES($1,$2,$3,$4) ON CONFLICT(idempotency_key) DO NOTHING RETURNING id', [s.telegramId, 'telegram_followup_claim', { result: merged }, idempotencyKey]);
+        if (!claimed.rowCount) { await client.query('COMMIT'); return; }
+      }
+      if (!ensureOnly || !current.rowCount) await client.query('INSERT INTO followups(telegram_id,payload,count,last_sent_at,updated_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(telegram_id) DO UPDATE SET payload=EXCLUDED.payload,count=EXCLUDED.count,last_sent_at=EXCLUDED.last_sent_at,updated_at=now()', [s.telegramId, merged, merged.count, merged.lastSentAt ?? null]);
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
 }
 
 async function importJson(c:PoolClient,leadsFile:string,followupsFile:string){for(const lead of await jsonArray<Lead>(leadsFile,'leads'))await c.query('INSERT INTO leads(telegram_id,payload,status,source,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',[lead.telegramId,normalizeLead(lead),lead.status,lead.source??'unknown',lead.createdAt,lead.updatedAt??lead.createdAt]);for(const f of await jsonArray<FollowUpState>(followupsFile,'followups'))await c.query('INSERT INTO followups(telegram_id,payload,count,last_sent_at) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[f.telegramId,f,f.count,f.lastSentAt??null]);}

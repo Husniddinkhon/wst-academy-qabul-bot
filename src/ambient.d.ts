@@ -27,8 +27,22 @@ declare module 'node:path' {
 }
 
 declare module 'telegraf' {
+  export type MiddlewareFn<C = any> = (ctx: C, next: () => Promise<void>) => unknown;
+  export interface SessionStore<S> {
+    get(name: string): S | undefined | Promise<S | undefined>;
+    set(name: string, value: S): unknown | Promise<unknown>;
+    delete(name: string): unknown | Promise<unknown>;
+  }
+  export class Telegram {
+    callApi(method: string, payload: unknown, options?: unknown): Promise<unknown>;
+    setMyDescription(description: string): Promise<void>;
+    setMyShortDescription(shortDescription: string): Promise<void>;
+    setMyCommands(commands: Array<{ command: string; description: string }>, extra?: { scope: { type: 'default' } | { type: 'chat'; chat_id: number } }): Promise<void>;
+    sendMessage(chatId: number | string, text: string): Promise<{ message_id: number }>;
+    sendPhoto(chatId: number | string, photo: string, extra?: { caption?: string }): Promise<{ message_id: number }>;
+  }
   export class Telegraf<C = any> {
-    telegram: { setMyDescription(description: string): Promise<void>; setMyShortDescription(shortDescription: string): Promise<void>; setMyCommands(commands: Array<{ command: string; description: string }>, extra?: { scope: { type: 'default' } | { type: 'chat'; chat_id: number } }): Promise<void>; sendMessage(chatId: number | string, text: string): Promise<{ message_id: number }>; sendPhoto(chatId: number | string, photo: string, extra?: { caption?: string }): Promise<{ message_id: number }> };
+    telegram: Telegram;
     constructor(token: string);
     use(middleware: unknown): void;
     start(handler: (ctx: C) => unknown): void;
@@ -37,7 +51,8 @@ declare module 'telegraf' {
     on(updateType: string, handler: (ctx: C) => unknown): void;
     command(command: string, handler: (ctx: C) => unknown): void;
     catch(handler: (error: unknown, ctx: { update: { update_id: number } }) => unknown): void;
-    launch(options?: { dropPendingUpdates?: boolean }): Promise<void>;
+    launch(options?: { dropPendingUpdates?: boolean }, onLaunch?: () => void): Promise<void>;
+    handleUpdate(update: unknown): Promise<void>;
     stop(reason?: string): void;
   }
 
@@ -67,7 +82,7 @@ declare module 'telegraf' {
     }
   }
 
-  export interface Context {}
+  export interface Context { update: { update_id: number; [key: string]: unknown } }
 
   export const Markup: {
     keyboard(buttons: unknown[][]): { resize(): unknown };
@@ -79,7 +94,7 @@ declare module 'telegraf' {
     fromBuffer(buffer: unknown, filename: string): unknown;
   };
 
-  export function session(): unknown;
+  export function session<S = any, C = any>(options?: { store?: SessionStore<S>; defaultSession?: (ctx: C) => S }): unknown;
 }
 
 declare namespace NodeJS {

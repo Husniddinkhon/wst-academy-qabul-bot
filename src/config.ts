@@ -14,6 +14,9 @@ export interface AppConfig {
   academyReportTimeoutMs: number;
   webhookFailedFile: string;
   followupsFile: string;
+  telegramUpdatesFile: string;
+  telegramUpdateLeaseMs: number;
+  telegramUpdateRetention: number;
   dailyReportEnabled: boolean;
   dailyReportHour: number;
   operatorUsername: string;
@@ -128,6 +131,9 @@ export function loadConfig(): AppConfig {
     academyReportTimeoutMs: parseBoundedInteger('ACADEMY_REPORT_TIMEOUT_MS', process.env.ACADEMY_REPORT_TIMEOUT_MS, 5_000, 500, 15_000),
     webhookFailedFile: process.env.WEBHOOK_FAILED_FILE ?? './data/webhook_failed.json',
     followupsFile: process.env.FOLLOWUPS_FILE ?? './data/followups.json',
+    telegramUpdatesFile: process.env.TELEGRAM_UPDATES_FILE ?? './data/telegram_updates.json',
+    telegramUpdateLeaseMs: parseBoundedInteger('TELEGRAM_UPDATE_LEASE_MS', process.env.TELEGRAM_UPDATE_LEASE_MS, 300_000, 30_000, 3_600_000),
+    telegramUpdateRetention: parseBoundedInteger('TELEGRAM_UPDATE_RETENTION', process.env.TELEGRAM_UPDATE_RETENTION, 100_000, 10_000, 1_000_000),
     dailyReportEnabled: process.env.DAILY_REPORT_ENABLED !== 'false',
     dailyReportHour: parseReportHour(process.env.DAILY_REPORT_HOUR),
     operatorUsername: process.env.OPERATOR_USERNAME || '@hr_wst',

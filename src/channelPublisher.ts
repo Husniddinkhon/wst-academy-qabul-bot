@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { JsonChannelPostStore, ChannelPost } from './channelPosts.js';
 import { isUnvPromotionActive, UNV_CAMPAIGN_ID, UNV_PRODUCT } from './productSales.js';
+import { withTelegramCallLabel } from './telegramUpdates.js';
 
 export interface ChannelSender {
   sendMessage(chatId: string, text: string): Promise<{ message_id: number }>;
@@ -15,9 +16,11 @@ export type PublishResult =
   | { ok: false; reason: 'campaign_expired'; post: ChannelPost; error: string }
   | { ok: false; reason: 'send_failed'; post: ChannelPost; error: string };
 
-export async function publishChannelPost(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, id: string, publisherId: number, retryFailed = false, mediaPolicy = defaultMediaPolicy()): Promise<PublishResult> {
-  const claim = await store.claimForPublishing(id, publisherId, retryFailed);
+export async function publishChannelPost(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, id: string, publisherId: number, retryFailed = false, mediaPolicy = defaultMediaPolicy(), idempotencyKey?: string): Promise<PublishResult> {
+  const claim = await store.claimForPublishing(id, publisherId, retryFailed, idempotencyKey);
   if (!claim.ok) return claim;
+  if (claim.replayed && claim.post.status === 'Published') return { ok: true, post: claim.post };
+  if (claim.replayed && claim.post.status === 'Failed') return { ok: false, reason: 'send_failed', post: claim.post, error: claim.post.lastError ?? 'Previous publication attempt failed.' };
   return publishClaimedChannelPost(store, sender, channelChatId, claim.post, claim.attemptId, new Date(), mediaPolicy);
 }
 
@@ -31,8 +34,8 @@ export async function publishClaimedChannelPost(store: JsonChannelPostStore, sen
   try {
     const photo = resolveChannelPhoto(post, mediaPolicy);
     const sent = photo
-      ? await sender.sendPhoto(channelChatId, photo, { caption: post.text })
-      : await sender.sendMessage(channelChatId, post.text);
+      ? await withTelegramCallLabel(`channel:publish:${post.id}`, () => sender.sendPhoto(channelChatId, photo, { caption: post.text }))
+      : await withTelegramCallLabel(`channel:publish:${post.id}`, () => sender.sendMessage(channelChatId, post.text));
     const published = await store.markPublished(post.id, attemptId, sent.message_id);
     if (!published) throw new Error('Publish state changed before completion');
     return { ok: true, post: published };

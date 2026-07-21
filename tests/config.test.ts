@@ -129,3 +129,23 @@ test('rejects unsafe channel scheduler controls', () => {
   process.env.CHANNEL_PUBLISH_STALE_MS = '0';
   assert.throws(() => loadConfig(), /CHANNEL_PUBLISH_STALE_MS/);
 });
+
+test('loads bounded durable Telegram update controls', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.TELEGRAM_UPDATES_FILE = './private/update-ledger.json';
+  process.env.TELEGRAM_UPDATE_LEASE_MS = '120000';
+  process.env.TELEGRAM_UPDATE_RETENTION = '25000';
+  const config = loadConfig();
+  assert.equal(config.telegramUpdatesFile, './private/update-ledger.json');
+  assert.equal(config.telegramUpdateLeaseMs, 120_000);
+  assert.equal(config.telegramUpdateRetention, 25_000);
+});
+
+test('rejects unsafe Telegram update lease and retention values', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.TELEGRAM_UPDATE_LEASE_MS = '1000';
+  assert.throws(() => loadConfig(), /TELEGRAM_UPDATE_LEASE_MS/);
+  process.env.TELEGRAM_UPDATE_LEASE_MS = '300000';
+  process.env.TELEGRAM_UPDATE_RETENTION = '100';
+  assert.throws(() => loadConfig(), /TELEGRAM_UPDATE_RETENTION/);
+});

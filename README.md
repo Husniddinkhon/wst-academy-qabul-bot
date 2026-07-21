@@ -26,6 +26,8 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - Daily admin report automation
 - Follow-up automation for leads who have not completed registration
 - Local JSON storage with atomic writes
+- Durable Telegram `update_id` replay protection and persistent wizard sessions
+- Stable per-update keys for applicant, admin, publication, follow-up, webhook, AI, and Telegram API side effects
 - Optional n8n-compatible lead webhook delivery
 - Environment-based configuration; no bot token in code
 - Campaign attribution is attached only after explicit registration or an operator call request with a submitted phone number
@@ -70,6 +72,9 @@ ADMIN_IDS=123456789,987654321
 LEADS_FILE=./data/leads.json
 WEBHOOK_FAILED_FILE=./data/webhook_failed.json
 FOLLOWUPS_FILE=./data/followups.json
+TELEGRAM_UPDATES_FILE=./data/telegram_updates.json
+TELEGRAM_UPDATE_LEASE_MS=300000
+TELEGRAM_UPDATE_RETENTION=100000
 LEAD_WEBHOOK_URL=
 LEAD_WEBHOOK_SERVICE_ID=
 LEAD_WEBHOOK_SECRET=
@@ -108,13 +113,15 @@ npm start
 
 ## Data storage
 
-Leads are stored locally in `data/leads.json` by default. You can change this path with `LEADS_FILE`. Failed webhook deliveries and follow-up state default to `data/webhook_failed.json` and `data/followups.json`, configurable with `WEBHOOK_FAILED_FILE` and `FOLLOWUPS_FILE`.
+Leads are stored locally in `data/leads.json` by default. You can change this path with `LEADS_FILE`. Failed webhook deliveries and follow-up state default to `data/webhook_failed.json` and `data/followups.json`, configurable with `WEBHOOK_FAILED_FILE` and `FOLLOWUPS_FILE`. Telegram update claims, recoverable raw updates, and durable session state share `data/telegram_updates.json`, allowing one atomic commit per handled update. Keep it private; inactive sessions expire after 30 days.
 
 The `data/*.json` files are ignored by Git to avoid committing personal lead data.
 
 JSON lock ownership, backup generations, recovery order, and operational guidance are documented in
 [`docs/wave-1-storage-reliability.md`](docs/wave-1-storage-reliability.md). The current security,
 durability, and workflow backlog is maintained in [`docs/defect-register.md`](docs/defect-register.md).
+Wave 2 replay, crash, and uncertain-outcome behavior is documented in
+[`docs/wave-2-telegram-idempotency.md`](docs/wave-2-telegram-idempotency.md).
 
 ## Deployment notes
 
