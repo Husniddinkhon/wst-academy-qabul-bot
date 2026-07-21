@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import type { JsonWebhookFailureStore } from './storage.js';
+import { DEFAULT_WEBHOOK_RETRY_POLICY, type JsonWebhookFailureStore, type WebhookFailureCategory, type WebhookRetryPolicy } from './storage.js';
 import type { Lead, LeadWebhookEvent } from './types.js';
 import { IndeterminateTelegramEffectError, runCurrentUpdateEffect } from './telegramUpdates.js';
 
@@ -9,11 +9,15 @@ export interface LeadWebhookSigningConfig {
 }
 
 let signingConfig: LeadWebhookSigningConfig | undefined;
+let retryPolicy: WebhookRetryPolicy = { ...DEFAULT_WEBHOOK_RETRY_POLICY };
 export const LEAD_WEBHOOK_TIMEOUT_MS = 8_000;
 
 export function configureLeadWebhookSigning(config: LeadWebhookSigningConfig | undefined): void {
   signingConfig = config ? { serviceId: config.serviceId, secret: config.secret } : undefined;
 }
+
+export function configureLeadWebhookRetryPolicy(policy: WebhookRetryPolicy): void { retryPolicy = { ...policy }; }
+export function getLeadWebhookRetryPolicy(): WebhookRetryPolicy { return { ...retryPolicy }; }
 
 export function toWebhookPayload(event: LeadWebhookEvent, lead: Lead): Record<string, string> {
   return {
@@ -133,28 +137,38 @@ export async function deliverLeadWebhook(webhookUrl: string | undefined, failure
     await sendLeadWebhook(webhookUrl, event, lead, timeoutMs, stableKey);
   } catch (error) {
     console.error('Lead webhook delivery failed:', safeError(error));
-    await failureStore.add({ event, lead, lastError: safeError(error), idempotencyKey: stableKey, outcomeUncertain: isWebhookOutcomeUncertain(error) });
+    const category = classifyWebhookFailure(error);
+    await failureStore.add({ event, lead, lastError: safeError(error), idempotencyKey: stableKey, outcomeUncertain: category === 'uncertain', failureCategory: category }, retryPolicy);
   }
 }
 
-export async function retryFailedWebhooks(webhookUrl: string | undefined, failureStore: JsonWebhookFailureStore): Promise<{ attempted: number; sent: number; remaining: number }> {
+export async function retryFailedWebhooks(webhookUrl: string | undefined, failureStore: JsonWebhookFailureStore, now = new Date()): Promise<{ attempted: number; sent: number; remaining: number }> {
   const failed = await failureStore.all();
   if (!webhookUrl || failed.length === 0) return { attempted: 0, sent: 0, remaining: failed.length };
-  const claimed = await failureStore.claimRetryable();
+  const claimed = await failureStore.claimRetryable(now, retryPolicy);
   let sent = 0;
   for (const item of claimed) {
     try {
       await sendLeadWebhook(webhookUrl, item.event, item.lead, LEAD_WEBHOOK_TIMEOUT_MS, item.idempotencyKey);
-      await failureStore.finishRetry(item, { sent: true });
+      await failureStore.finishRetry(item, { sent: true }, new Date(), retryPolicy);
       sent += 1;
     } catch (error) {
-      await failureStore.finishRetry(item, { sent: false, error: safeError(error), outcomeUncertain: isWebhookOutcomeUncertain(error) });
+      const category = classifyWebhookFailure(error);
+      await failureStore.finishRetry(item, { sent: false, error: safeError(error), outcomeUncertain: category === 'uncertain', category }, new Date(), retryPolicy);
     }
   }
   return { attempted: claimed.length, sent, remaining: (await failureStore.all()).length };
 }
 
 function safeError(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-function isWebhookOutcomeUncertain(error: unknown): boolean { return error instanceof IndeterminateTelegramEffectError || !/failed with status \d+/.test(safeError(error)); }
+export function classifyWebhookFailure(error: unknown): WebhookFailureCategory {
+  if (error instanceof IndeterminateTelegramEffectError) return 'uncertain';
+  const statusMatch = safeError(error).match(/failed with status (\d+)/i);
+  const status = statusMatch ? Number(statusMatch[1]) : undefined;
+  if (status === 408 || status === 429 || (status !== undefined && status >= 500)) return 'transient';
+  if (status !== undefined && status >= 400 && status < 500) return 'permanent';
+  return 'uncertain';
+}
+function isWebhookOutcomeUncertain(error: unknown): boolean { return classifyWebhookFailure(error) === 'uncertain'; }
 function defaultWebhookIdempotencyKey(event: LeadWebhookEvent, lead: Lead): string { return bodyIdempotencyKey(JSON.stringify(signingConfig ? toAcademyWebhookPayload(event, lead) : toWebhookPayload(event, lead))); }
 function bodyIdempotencyKey(body: string): string { return `lead-${createHash('sha256').update(body, 'utf8').digest('hex')}`; }

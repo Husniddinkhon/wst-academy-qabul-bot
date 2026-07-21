@@ -1,11 +1,36 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
 import type { FollowUpState, Lead, LeadStatus, LeadWebhookEvent } from './types.js';
 
 interface StoredLeadEffect { kind: 'upsert' | 'update'; result: LeadUpsertResult | Lead | undefined }
 interface LeadDatabase { leads: Lead[]; effects: Record<string, StoredLeadEffect>; }
-export interface FailedWebhookPayload { event: LeadWebhookEvent; lead: Lead; failedAt: string; attempts: number; lastError?: string; idempotencyKey?: string; outcomeUncertain?: boolean; retryToken?: string; retryClaimedAt?: string; }
+export type WebhookFailureState = 'RetryWait' | 'Claimed' | 'Uncertain' | 'DeadLetter';
+export type WebhookFailureCategory = 'transient' | 'permanent' | 'uncertain';
+export interface WebhookAuditEvent { at: string; event: string; actorId?: number; reason?: string }
+export interface FailedWebhookPayload {
+  id?: string;
+  event: LeadWebhookEvent;
+  lead: Lead;
+  failedAt: string;
+  firstFailedAt?: string;
+  retainedUntil?: string;
+  attempts: number;
+  state?: WebhookFailureState;
+  failureCategory?: WebhookFailureCategory;
+  nextRetryAt?: string;
+  deadLetteredAt?: string;
+  manualReplayCount?: number;
+  audit?: WebhookAuditEvent[];
+  lastError?: string;
+  idempotencyKey?: string;
+  outcomeUncertain?: boolean;
+  retryToken?: string;
+  retryClaimedAt?: string;
+  retryLeaseUntil?: string;
+}
+export interface WebhookRetryPolicy { maxAttempts: number; retentionMs: number; retryBaseMs: number; retryMaxMs: number; claimLeaseMs: number; maxManualReplays: number }
+export const DEFAULT_WEBHOOK_RETRY_POLICY: WebhookRetryPolicy = { maxAttempts: 5, retentionMs: 7 * 24 * 60 * 60_000, retryBaseMs: 60_000, retryMaxMs: 60 * 60_000, claimLeaseMs: 10 * 60_000, maxManualReplays: 1 };
 interface FailedWebhookDatabase { payloads: FailedWebhookPayload[]; }
 interface FollowUpDatabase { followups: FollowUpState[]; effectKeys: string[]; }
 export interface FollowUpDeliveryRequest { telegramId: number; followUpId: string; task: NonNullable<FollowUpState['task']>; dueAt: string; timeZone: 'Asia/Tashkent' }
@@ -91,45 +116,132 @@ export class JsonLeadStore {
 
 export class JsonWebhookFailureStore {
   constructor(private readonly filePath: string) {}
-  async add(payload: Omit<FailedWebhookPayload, 'failedAt' | 'attempts'>): Promise<void> { await withFileLock(this.filePath, async () => { const db = await this.read(); if (payload.idempotencyKey && db.payloads.some((item) => item.idempotencyKey === payload.idempotencyKey)) return; db.payloads.push({ ...payload, failedAt: new Date().toISOString(), attempts: 1 }); await atomicWriteJson(this.filePath, db); }); }
-  async all(): Promise<FailedWebhookPayload[]> { return (await this.read()).payloads; }
-  async replace(payloads: FailedWebhookPayload[]): Promise<void> { await withFileLock(this.filePath, async () => atomicWriteJson(this.filePath, { payloads })); }
-  async claimRetryable(now = new Date()): Promise<FailedWebhookPayload[]> {
+  async add(payload: Omit<FailedWebhookPayload, 'failedAt' | 'attempts'>, policy = DEFAULT_WEBHOOK_RETRY_POLICY, now = new Date()): Promise<void> {
+    await withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      if (payload.idempotencyKey && db.payloads.some((item) => item.idempotencyKey === payload.idempotencyKey)) return;
+      const category = payload.failureCategory ?? (payload.outcomeUncertain ? 'uncertain' : 'transient');
+      const state: WebhookFailureState = category === 'uncertain' ? 'Uncertain' : category === 'permanent' ? 'DeadLetter' : 'RetryWait';
+      const at = now.toISOString();
+      db.payloads.push(normalizeWebhookFailure({
+        ...payload,
+        id: payload.id ?? randomUUID().slice(0, 12),
+        failedAt: at,
+        firstFailedAt: at,
+        retainedUntil: new Date(now.getTime() + policy.retentionMs).toISOString(),
+        attempts: 1,
+        state,
+        failureCategory: category,
+        outcomeUncertain: category === 'uncertain',
+        nextRetryAt: state === 'RetryWait' ? new Date(now.getTime() + boundedWebhookBackoff(1, policy)).toISOString() : undefined,
+        deadLetteredAt: state === 'DeadLetter' ? at : undefined,
+        manualReplayCount: 0,
+        audit: [{ at, event: state === 'DeadLetter' ? 'webhook_permanent_failure' : state === 'Uncertain' ? 'webhook_outcome_uncertain' : 'webhook_retry_scheduled' }],
+      }));
+      await atomicWriteJson(this.filePath, db);
+    });
+  }
+  async all(): Promise<FailedWebhookPayload[]> { return (await this.read()).payloads.map(normalizeWebhookFailure); }
+  async replace(payloads: FailedWebhookPayload[]): Promise<void> { await withFileLock(this.filePath, async () => atomicWriteJson(this.filePath, { payloads: payloads.map(normalizeWebhookFailure) })); }
+  async claimRetryable(now = new Date(), policy = DEFAULT_WEBHOOK_RETRY_POLICY): Promise<FailedWebhookPayload[]> {
     return withFileLock(this.filePath, async () => {
       const db = await this.read();
       const claimed: FailedWebhookPayload[] = [];
-      for (const item of db.payloads) {
-        if (item.outcomeUncertain) continue;
+      let changed = false;
+      let expired = 0;
+      db.payloads = db.payloads.filter((raw) => {
+        const item = normalizeWebhookFailure(raw);
+        if (item.retainedUntil && new Date(item.retainedUntil) <= now) { expired += 1; changed = true; return false; }
+        return true;
+      });
+      for (let index = 0; index < db.payloads.length; index += 1) {
+        let item = normalizeWebhookFailure(db.payloads[index]);
+        db.payloads[index] = item;
+        if (item.state === 'Uncertain' || item.state === 'DeadLetter' || item.outcomeUncertain) continue;
+        if (item.attempts >= policy.maxAttempts) {
+          item = appendWebhookAudit({ ...item, state: 'DeadLetter', deadLetteredAt: now.toISOString(), retryToken: undefined, retryClaimedAt: undefined, retryLeaseUntil: undefined, lastError: item.lastError ?? 'Webhook retry ceiling exhausted.' }, 'webhook_retry_exhausted', now);
+          db.payloads[index] = item;
+          changed = true;
+          continue;
+        }
         if (item.retryToken) {
-          const claimedAt = item.retryClaimedAt ? new Date(item.retryClaimedAt).getTime() : 0;
-          if (claimedAt <= now.getTime() - 10 * 60_000) {
-            item.outcomeUncertain = true;
-            item.lastError = 'Webhook retry ownership expired after an interrupted attempt; external outcome requires evidence review.';
-            item.retryToken = undefined;
-            item.retryClaimedAt = undefined;
+          const leaseUntil = item.retryLeaseUntil ? new Date(item.retryLeaseUntil).getTime() : (item.retryClaimedAt ? new Date(item.retryClaimedAt).getTime() + policy.claimLeaseMs : 0);
+          if (leaseUntil <= now.getTime()) {
+            item = appendWebhookAudit({ ...item, state: 'Uncertain', failureCategory: 'uncertain', outcomeUncertain: true, lastError: 'Webhook retry ownership expired after an interrupted attempt; external outcome requires evidence review.', retryToken: undefined, retryClaimedAt: undefined, retryLeaseUntil: undefined, nextRetryAt: undefined }, 'webhook_stale_claim_uncertain', now);
+            db.payloads[index] = item;
+            changed = true;
           }
           continue;
         }
-        item.retryToken = randomUUID();
-        item.retryClaimedAt = now.toISOString();
+        if (item.nextRetryAt && new Date(item.nextRetryAt) > now) continue;
+        item = appendWebhookAudit({ ...item, state: 'Claimed', retryToken: randomUUID(), retryClaimedAt: now.toISOString(), retryLeaseUntil: new Date(now.getTime() + policy.claimLeaseMs).toISOString() }, 'webhook_retry_claimed', now);
+        db.payloads[index] = item;
         claimed.push({ ...item });
+        changed = true;
       }
-      await atomicWriteJson(this.filePath, db);
+      if (changed) await atomicWriteJson(this.filePath, db);
+      if (expired) console.info(JSON.stringify({ event: 'webhook_retention_expired', count: expired }));
       return claimed;
     });
   }
-  async finishRetry(claimed: FailedWebhookPayload, outcome: { sent: true } | { sent: false; error: string; outcomeUncertain: boolean }, now = new Date()): Promise<void> {
+  async finishRetry(claimed: FailedWebhookPayload, outcome: { sent: true } | { sent: false; error: string; outcomeUncertain: boolean; category?: WebhookFailureCategory }, now = new Date(), policy = DEFAULT_WEBHOOK_RETRY_POLICY): Promise<void> {
     await withFileLock(this.filePath, async () => {
       const db = await this.read();
       const index = db.payloads.findIndex((item) => item.retryToken === claimed.retryToken && item.retryToken !== undefined);
       if (index < 0) throw new Error('Webhook retry ownership lost.');
       if (outcome.sent) db.payloads.splice(index, 1);
-      else db.payloads[index] = { ...db.payloads[index], attempts: db.payloads[index].attempts + 1, failedAt: now.toISOString(), lastError: outcome.error, outcomeUncertain: outcome.outcomeUncertain, retryToken: undefined, retryClaimedAt: undefined };
+      else {
+        const current = normalizeWebhookFailure(db.payloads[index]);
+        const attempts = current.attempts + 1;
+        const category = outcome.category ?? (outcome.outcomeUncertain ? 'uncertain' : 'transient');
+        const terminal = category === 'permanent' || attempts >= policy.maxAttempts;
+        const state: WebhookFailureState = category === 'uncertain' ? 'Uncertain' : terminal ? 'DeadLetter' : 'RetryWait';
+        db.payloads[index] = appendWebhookAudit({
+          ...current, attempts, failedAt: now.toISOString(), lastError: outcome.error, failureCategory: category,
+          outcomeUncertain: category === 'uncertain', state, retryToken: undefined, retryClaimedAt: undefined, retryLeaseUntil: undefined,
+          nextRetryAt: state === 'RetryWait' ? new Date(now.getTime() + boundedWebhookBackoff(attempts, policy)).toISOString() : undefined,
+          deadLetteredAt: state === 'DeadLetter' ? now.toISOString() : current.deadLetteredAt,
+        }, state === 'DeadLetter' ? (category === 'permanent' ? 'webhook_permanent_failure' : 'webhook_retry_exhausted') : state === 'Uncertain' ? 'webhook_outcome_uncertain' : 'webhook_retry_scheduled', now);
+      }
       await atomicWriteJson(this.filePath, db);
     });
   }
-  private async read(): Promise<FailedWebhookDatabase> { const parsed = await readJson<FailedWebhookDatabase>(this.filePath, { payloads: [] }); return { payloads: Array.isArray(parsed.payloads) ? parsed.payloads : [] }; }
+  async manualReplay(id: string, actorId: number, reason: string, now = new Date(), policy = DEFAULT_WEBHOOK_RETRY_POLICY): Promise<{ ok: true; payload: FailedWebhookPayload } | { ok: false; reason: 'not_found' | 'not_allowed' | 'expired' }> {
+    if (!Number.isSafeInteger(actorId) || actorId <= 0 || reason.trim().length < 8) return { ok: false, reason: 'not_allowed' };
+    return withFileLock(this.filePath, async () => {
+      const db = await this.read();
+      const index = db.payloads.findIndex((item) => normalizeWebhookFailure(item).id === id);
+      if (index < 0) return { ok: false, reason: 'not_found' } as const;
+      const current = normalizeWebhookFailure(db.payloads[index]);
+      if (current.retainedUntil && new Date(current.retainedUntil) <= now) return { ok: false, reason: 'expired' } as const;
+      if (!['DeadLetter', 'Uncertain'].includes(current.state ?? '') || (current.manualReplayCount ?? 0) >= policy.maxManualReplays) return { ok: false, reason: 'not_allowed' } as const;
+      const updated = appendWebhookAudit({ ...current, state: 'RetryWait', failureCategory: 'transient', outcomeUncertain: false, attempts: 0, manualReplayCount: (current.manualReplayCount ?? 0) + 1, nextRetryAt: now.toISOString(), deadLetteredAt: undefined, retryToken: undefined, retryClaimedAt: undefined, retryLeaseUntil: undefined }, 'webhook_manual_replay_authorized', now, actorId, reason.trim());
+      db.payloads[index] = updated;
+      await atomicWriteJson(this.filePath, db);
+      return { ok: true, payload: updated } as const;
+    });
+  }
+  private async read(): Promise<FailedWebhookDatabase> { const parsed = await readJson<FailedWebhookDatabase>(this.filePath, { payloads: [] }); return { payloads: Array.isArray(parsed.payloads) ? parsed.payloads.map(normalizeWebhookFailure) : [] }; }
 }
+
+function normalizeWebhookFailure(payload: FailedWebhookPayload): FailedWebhookPayload {
+  const firstFailedAt = payload.firstFailedAt ?? payload.failedAt;
+  const category = payload.failureCategory ?? (payload.outcomeUncertain ? 'uncertain' : 'transient');
+  return {
+    ...payload,
+    id: payload.id ?? legacyWebhookId(payload, firstFailedAt),
+    firstFailedAt,
+    retainedUntil: payload.retainedUntil ?? new Date(new Date(firstFailedAt).getTime() + DEFAULT_WEBHOOK_RETRY_POLICY.retentionMs).toISOString(),
+    state: payload.state ?? (category === 'uncertain' ? 'Uncertain' : 'RetryWait'),
+    failureCategory: category,
+    outcomeUncertain: category === 'uncertain',
+    manualReplayCount: payload.manualReplayCount ?? 0,
+    audit: Array.isArray(payload.audit) ? payload.audit : [],
+  };
+}
+function boundedWebhookBackoff(attempts: number, policy: WebhookRetryPolicy): number { return Math.min(policy.retryMaxMs, policy.retryBaseMs * (2 ** Math.max(0, attempts - 1))); }
+function appendWebhookAudit(payload: FailedWebhookPayload, event: string, now = new Date(), actorId?: number, reason?: string): FailedWebhookPayload { return { ...payload, audit: [...(payload.audit ?? []), { at: now.toISOString(), event, actorId, reason }].slice(-100) }; }
+function legacyWebhookId(payload: FailedWebhookPayload, firstFailedAt: string): string { return createHash('sha256').update(payload.idempotencyKey ?? `${payload.event}:${payload.lead.id}:${firstFailedAt}`).digest('hex').slice(0, 12); }
 
 export class JsonFollowUpStore {
   constructor(private readonly filePath: string) {}

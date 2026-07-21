@@ -6,7 +6,7 @@ import { isAdmin, notifyCallRequestLead, notifyHotLead, notifyScoredHotLead, reg
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, phoneRequestKeyboard, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
 import { answerWithAiAgent, extractPhoneNumber, getPhoneRequestAnswer, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic, scoreLead } from './aiAgent.js';
-import { configureLeadWebhookSigning, deliverLeadWebhook } from './webhook.js';
+import { configureLeadWebhookRetryPolicy, configureLeadWebhookSigning, deliverLeadWebhook } from './webhook.js';
 import type { BotContext, BotSession, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
 import { startDailyReport } from './dailyReport.js';
@@ -224,6 +224,14 @@ async function bootstrap(): Promise<void> {
     serviceId: config.leadWebhookServiceId,
     secret: config.leadWebhookSecret,
   } : undefined);
+  configureLeadWebhookRetryPolicy({
+    maxAttempts: config.webhookMaxAttempts,
+    retentionMs: config.webhookRetentionMs,
+    retryBaseMs: config.webhookRetryBaseMs,
+    retryMaxMs: config.webhookRetryMaxMs,
+    claimLeaseMs: config.webhookClaimLeaseMs,
+    maxManualReplays: config.webhookMaxManualReplays,
+  });
   const postgres = config.databaseUrl ? new PostgresStorage(config.databaseUrl) : undefined;
   if (postgres) await postgres.migrate(config.leadsFile, config.followupsFile);
   const store = postgres ? new PostgresLeadStore(postgres) : new JsonLeadStore(config.leadsFile);
@@ -407,6 +415,8 @@ async function bootstrap(): Promise<void> {
     { command: 'set_student', description: 'O‘quvchi holatini yangilash (admin)' },
     { command: 'export_csv', description: 'Leadlarni CSV qilish (admin)' },
     { command: 'retry_webhooks', description: 'Webhook retry (admin)' },
+    { command: 'webhook_failures', description: 'Webhook retry/dead-letter holatlari (admin)' },
+    { command: 'replay_webhook', description: 'Webhook manual replay (admin)' },
     { command: 'lead', description: 'Leadni Telegram ID bilan topish (admin)' },
     { command: 'set_status', description: 'Lead statusini yangilash (admin)' },
     { command: 'operator_note', description: 'Leadga operator izohi (admin)' },

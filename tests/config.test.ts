@@ -159,6 +159,25 @@ test('loads and validates bounded follow-up delivery controls', () => {
   assert.throws(() => loadConfig(), /must be greater than or equal/);
 });
 
+test('loads and validates bounded webhook retry lifecycle controls', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.WEBHOOK_MAX_ATTEMPTS = '6';
+  process.env.WEBHOOK_RETENTION_MS = '86400000';
+  process.env.WEBHOOK_RETRY_BASE_MS = '2000';
+  process.env.WEBHOOK_RETRY_MAX_MS = '10000';
+  process.env.WEBHOOK_CLAIM_LEASE_MS = '120000';
+  process.env.WEBHOOK_MAX_MANUAL_REPLAYS = '2';
+  const config = loadConfig();
+  assert.equal(config.webhookMaxAttempts, 6);
+  assert.equal(config.webhookRetentionMs, 86_400_000);
+  assert.equal(config.webhookRetryBaseMs, 2_000);
+  assert.equal(config.webhookRetryMaxMs, 10_000);
+  assert.equal(config.webhookClaimLeaseMs, 120_000);
+  assert.equal(config.webhookMaxManualReplays, 2);
+  process.env.WEBHOOK_RETRY_MAX_MS = '1000';
+  assert.throws(() => loadConfig(), /WEBHOOK_RETRY_MAX_MS must be greater/);
+});
+
 test('loads bounded durable Telegram update controls', () => {
   process.env.BOT_TOKEN = 'test-token';
   process.env.TELEGRAM_UPDATES_FILE = './private/update-ledger.json';

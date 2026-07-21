@@ -2,7 +2,7 @@ import { Input } from 'telegraf';
 import type { BotContext, LeadStatus, StudentStatus } from './types.js';
 import type { JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { formatLead, formatLeadList } from './messages.js';
-import { deliverLeadWebhook, retryFailedWebhooks } from './webhook.js';
+import { deliverLeadWebhook, getLeadWebhookRetryPolicy, retryFailedWebhooks } from './webhook.js';
 import type { JsonChannelPostStore } from './channelPosts.js';
 import { publishChannelPost, type ChannelMediaPolicy, type PublishAttemptOptions } from './channelPublisher.js';
 import { buildSalesReport, formatSalesReport, parseSalesReportRange, type SalesReportDependencies } from './salesReporting.js';
@@ -93,6 +93,8 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       `/set_status <telegram_id> <status> — status o‘zgartirish (${VALID_STATUSES.join(', ')})`,
       '/operator_note <telegram_id> <note> — operator izohi qo‘shish',
       '/retry_webhooks — yuborilmay qolgan webhooklarni qayta yuborish',
+      '/webhook_failures — webhook retry/dead-letter ID va holatlari',
+      '/replay_webhook <id> <reason> — dead-letter/uncertain webhookni audited manual replay',
     ].join('\n'));
   });
 
@@ -337,6 +339,19 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
   });
   bot.command('export_csv', async (ctx) => { if (!(await guard(ctx))) return; const csv = await store.toCsv(); return ctx.replyWithDocument(Input.fromBuffer(Buffer.from(csv, 'utf8'), `wst-leads-${telegramUpdateTimestamp(ctx.update).slice(0, 10)}.csv`)); });
   bot.command('retry_webhooks', async (ctx) => { if (!(await guard(ctx))) return; const r = await retryFailedWebhooks(leadWebhookUrl, failureStore); return ctx.reply(`Webhook retry: attempted ${r.attempted}, sent ${r.sent}, remaining ${r.remaining}`); });
+  bot.command('webhook_failures', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const failures = await failureStore.all();
+    return ctx.reply(failures.length ? failures.slice(0, 20).map((item) => `${item.id} | ${item.state} | attempts ${item.attempts} | retained ${item.retainedUntil ?? 'legacy'}`).join('\n') : 'Webhook failure queue bo‘sh.');
+  });
+  bot.command('replay_webhook', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const [, id, ...reasonParts] = commandText(ctx).trim().split(/\s+/);
+    const reason = reasonParts.join(' ').trim();
+    if (!id || !ctx.from?.id || reason.length < 8) return ctx.reply('Format: /replay_webhook <id> <kamida 8 belgi sabab>');
+    const result = await failureStore.manualReplay(id, ctx.from.id, reason, new Date(), getLeadWebhookRetryPolicy());
+    return ctx.reply(result.ok ? `Webhook manual replay navbatiga qaytarildi: ${id}. Original idempotency identity saqlandi.` : `Manual replay rad etildi: ${result.reason}.`);
+  });
   bot.command('lead', async (ctx) => { if (!(await guard(ctx))) return; const id = Number(commandText(ctx).split(/\s+/)[1]); const lead = Number.isSafeInteger(id) ? await store.getByTelegramId(id) : undefined; return ctx.reply(lead ? formatLead(lead) : 'Lead topilmadi.'); });
   bot.command('set_status', async (ctx) => {
     if (!(await guard(ctx))) return;

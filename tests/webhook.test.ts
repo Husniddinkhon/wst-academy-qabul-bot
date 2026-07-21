@@ -4,8 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { afterEach } from 'node:test';
-import { configureLeadWebhookSigning, createAcademyHeaders, deliverLeadWebhook, retryFailedWebhooks, sendLeadWebhook, toAcademyWebhookPayload } from '../src/webhook.js';
-import { JsonWebhookFailureStore, type FailedWebhookPayload } from '../src/storage.js';
+import { configureLeadWebhookRetryPolicy, configureLeadWebhookSigning, createAcademyHeaders, deliverLeadWebhook, retryFailedWebhooks, sendLeadWebhook, toAcademyWebhookPayload } from '../src/webhook.js';
+import { DEFAULT_WEBHOOK_RETRY_POLICY, JsonWebhookFailureStore, type FailedWebhookPayload } from '../src/storage.js';
 import type { Lead } from '../src/types.js';
 
 const lead: Lead = {
@@ -16,6 +16,7 @@ const lead: Lead = {
 const originalFetch = globalThis.fetch;
 afterEach(() => {
   configureLeadWebhookSigning(undefined);
+  configureLeadWebhookRetryPolicy(DEFAULT_WEBHOOK_RETRY_POLICY);
   globalThis.fetch = originalFetch;
 });
 
@@ -157,7 +158,7 @@ test('retry completion cannot erase a webhook failure appended concurrently', as
     const started = new Promise<void>((resolve) => { fetchStarted = resolve; });
     const release = new Promise<void>((resolve) => { releaseFetch = resolve; });
     globalThis.fetch = (async () => { fetchStarted(); await release; return { ok: true, status: 200 } as Response; }) as typeof fetch;
-    const retry = retryFailedWebhooks('https://academy.example/api/v1/admissions/bot-leads', store);
+    const retry = retryFailedWebhooks('https://academy.example/api/v1/admissions/bot-leads', store, new Date(Date.now() + DEFAULT_WEBHOOK_RETRY_POLICY.retryBaseMs + 1));
     await started;
     await store.add({ event: 'lead_updated', lead: { ...lead, lastMessage: 'new concurrent failure' }, idempotencyKey: 'second', outcomeUncertain: false });
     releaseFetch();
@@ -170,11 +171,102 @@ test('stale webhook retry ownership fails closed without another send', async ()
   const directory = await mkdtemp(path.join(tmpdir(), 'webhook-stale-'));
   try {
     const store = new JsonWebhookFailureStore(path.join(directory, 'failures.json'));
-    await store.add({ event: 'lead_created', lead, idempotencyKey: 'stale', outcomeUncertain: false });
-    assert.equal((await store.claimRetryable(new Date('2026-07-21T10:00:00.000Z'))).length, 1);
-    assert.equal((await store.claimRetryable(new Date('2026-07-21T10:10:00.001Z'))).length, 0);
+    const policy = { ...DEFAULT_WEBHOOK_RETRY_POLICY, retryBaseMs: 1_000, claimLeaseMs: 60_000 };
+    const start = new Date('2026-07-21T10:00:00.000Z');
+    await store.add({ event: 'lead_created', lead, idempotencyKey: 'stale', outcomeUncertain: false }, policy, start);
+    assert.equal((await store.claimRetryable(new Date(start.getTime() + 1_001), policy)).length, 1);
+    assert.equal((await store.claimRetryable(new Date(start.getTime() + 61_002), policy)).length, 0);
     const item = (await store.all())[0];
     assert.equal(item.outcomeUncertain, true);
     assert.match(item.lastError ?? '', /evidence review/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('retry ceiling creates an audited DeadLetter without another claim', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'webhook-ceiling-'));
+  try {
+    const store = new JsonWebhookFailureStore(path.join(directory, 'failures.json'));
+    const policy = { ...DEFAULT_WEBHOOK_RETRY_POLICY, maxAttempts: 2, retryBaseMs: 1_000, retryMaxMs: 1_000 };
+    const start = new Date('2026-07-21T10:00:00.000Z');
+    await store.add({ event: 'lead_created', lead, idempotencyKey: 'ceiling', failureCategory: 'transient' }, policy, start);
+    const [claim] = await store.claimRetryable(new Date(start.getTime() + 1_001), policy);
+    assert.ok(claim);
+    await store.finishRetry(claim, { sent: false, error: 'HTTP 500', outcomeUncertain: false, category: 'transient' }, new Date(start.getTime() + 1_002), policy);
+    const saved = (await store.all())[0];
+    assert.equal(saved.state, 'DeadLetter');
+    assert.equal(saved.attempts, 2);
+    assert.ok(saved.audit?.some((event) => event.event === 'webhook_retry_exhausted'));
+    assert.equal((await store.claimRetryable(new Date(start.getTime() + 10_000), policy)).length, 0);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('retention expiry removes failed payload with an explicit aggregate audit log', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'webhook-retention-'));
+  const originalInfo = console.info;
+  const logs: string[] = [];
+  console.info = (value?: unknown) => { logs.push(String(value)); };
+  try {
+    const store = new JsonWebhookFailureStore(path.join(directory, 'failures.json'));
+    const policy = { ...DEFAULT_WEBHOOK_RETRY_POLICY, retentionMs: 60_000, retryBaseMs: 1_000 };
+    const start = new Date('2026-07-21T10:00:00.000Z');
+    await store.add({ event: 'lead_created', lead, idempotencyKey: 'expiry', failureCategory: 'transient' }, policy, start);
+    assert.equal((await store.claimRetryable(new Date(start.getTime() + 60_001), policy)).length, 0);
+    assert.equal((await store.all()).length, 0);
+    assert.ok(logs.some((line) => line.includes('webhook_retention_expired') && line.includes('"count":1')));
+  } finally { console.info = originalInfo; await rm(directory, { recursive: true, force: true }); }
+});
+
+test('permanent failure dead-letters immediately and authorized manual replay preserves semantic identity', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'webhook-manual-'));
+  try {
+    const store = new JsonWebhookFailureStore(path.join(directory, 'failures.json'));
+    const policy = { ...DEFAULT_WEBHOOK_RETRY_POLICY, retryBaseMs: 1_000 };
+    const start = new Date('2026-07-21T10:00:00.000Z');
+    await store.add({ event: 'lead_updated', lead, idempotencyKey: 'semantic-original', failureCategory: 'permanent', lastError: 'HTTP 403' }, policy, start);
+    const before = (await store.all())[0];
+    assert.equal(before.state, 'DeadLetter');
+    assert.equal((await store.manualReplay(before.id!, 0, 'authorized reason', start, policy)).ok, false);
+    const replay = await store.manualReplay(before.id!, 99, 'Reviewed destination and approved replay.', start, policy);
+    assert.equal(replay.ok, true);
+    if (!replay.ok) return;
+    assert.equal(replay.payload.idempotencyKey, 'semantic-original');
+    assert.equal(replay.payload.state, 'RetryWait');
+    assert.equal(replay.payload.manualReplayCount, 1);
+    assert.ok(replay.payload.audit?.some((event) => event.event === 'webhook_manual_replay_authorized' && event.actorId === 99));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('duplicate webhook failure append keeps one stable queue identity', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'webhook-duplicate-'));
+  try {
+    const store = new JsonWebhookFailureStore(path.join(directory, 'failures.json'));
+    const start = new Date('2026-07-21T10:00:00.000Z');
+    await Promise.all([
+      store.add({ event: 'lead_created', lead, idempotencyKey: 'same-semantic-key', failureCategory: 'transient' }, DEFAULT_WEBHOOK_RETRY_POLICY, start),
+      store.add({ event: 'lead_created', lead, idempotencyKey: 'same-semantic-key', failureCategory: 'transient' }, DEFAULT_WEBHOOK_RETRY_POLICY, start),
+    ]);
+    const queued = await store.all();
+    assert.equal(queued.length, 1);
+    assert.equal(queued[0].id, (await store.all())[0].id);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('HTTP 4xx is permanent while HTTP 5xx remains a bounded transient retry', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'webhook-classification-'));
+  try {
+    const policy = { ...DEFAULT_WEBHOOK_RETRY_POLICY, retryBaseMs: 1_000 };
+    configureLeadWebhookRetryPolicy(policy);
+    const permanentStore = new JsonWebhookFailureStore(path.join(directory, 'permanent.json'));
+    globalThis.fetch = (async () => ({ ok: false, status: 403 }) as Response) as typeof fetch;
+    await deliverLeadWebhook('https://academy.example/hook', permanentStore, 'lead_updated', lead, 1_000, 'http-403');
+    assert.equal((await permanentStore.all())[0].state, 'DeadLetter');
+    assert.equal((await permanentStore.all())[0].failureCategory, 'permanent');
+
+    const transientStore = new JsonWebhookFailureStore(path.join(directory, 'transient.json'));
+    globalThis.fetch = (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch;
+    await deliverLeadWebhook('https://academy.example/hook', transientStore, 'lead_updated', lead, 1_000, 'http-503');
+    assert.equal((await transientStore.all())[0].state, 'RetryWait');
+    assert.equal((await transientStore.all())[0].failureCategory, 'transient');
+    assert.ok((await transientStore.all())[0].nextRetryAt);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

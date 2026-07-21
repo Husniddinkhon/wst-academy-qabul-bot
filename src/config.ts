@@ -13,6 +13,12 @@ export interface AppConfig {
   academyReportBaseUrl?: string;
   academyReportTimeoutMs: number;
   webhookFailedFile: string;
+  webhookMaxAttempts: number;
+  webhookRetentionMs: number;
+  webhookRetryBaseMs: number;
+  webhookRetryMaxMs: number;
+  webhookClaimLeaseMs: number;
+  webhookMaxManualReplays: number;
   followupsFile: string;
   followUpClaimLeaseMs: number;
   followUpMaxAttempts: number;
@@ -105,6 +111,9 @@ export function loadConfig(): AppConfig {
   const followUpRetryBaseMs = parseBoundedInteger('FOLLOWUP_RETRY_BASE_MS', process.env.FOLLOWUP_RETRY_BASE_MS, 300_000, 1_000, 3_600_000);
   const followUpRetryMaxMs = parseBoundedInteger('FOLLOWUP_RETRY_MAX_MS', process.env.FOLLOWUP_RETRY_MAX_MS, 3_600_000, 1_000, 86_400_000);
   if (followUpRetryMaxMs < followUpRetryBaseMs) throw new Error('FOLLOWUP_RETRY_MAX_MS must be greater than or equal to FOLLOWUP_RETRY_BASE_MS.');
+  const webhookRetryBaseMs = parseBoundedInteger('WEBHOOK_RETRY_BASE_MS', process.env.WEBHOOK_RETRY_BASE_MS, 60_000, 1_000, 3_600_000);
+  const webhookRetryMaxMs = parseBoundedInteger('WEBHOOK_RETRY_MAX_MS', process.env.WEBHOOK_RETRY_MAX_MS, 3_600_000, 1_000, 86_400_000);
+  if (webhookRetryMaxMs < webhookRetryBaseMs) throw new Error('WEBHOOK_RETRY_MAX_MS must be greater than or equal to WEBHOOK_RETRY_BASE_MS.');
 
   if (!botToken) {
     throw new Error('BOT_TOKEN is required. Copy .env.example to .env and set your Telegram bot token.');
@@ -145,6 +154,12 @@ export function loadConfig(): AppConfig {
     academyReportBaseUrl,
     academyReportTimeoutMs: parseBoundedInteger('ACADEMY_REPORT_TIMEOUT_MS', process.env.ACADEMY_REPORT_TIMEOUT_MS, 5_000, 500, 15_000),
     webhookFailedFile: process.env.WEBHOOK_FAILED_FILE ?? './data/webhook_failed.json',
+    webhookMaxAttempts: parseBoundedInteger('WEBHOOK_MAX_ATTEMPTS', process.env.WEBHOOK_MAX_ATTEMPTS, 5, 1, 20),
+    webhookRetentionMs: parseBoundedInteger('WEBHOOK_RETENTION_MS', process.env.WEBHOOK_RETENTION_MS, 604_800_000, 3_600_000, 2_592_000_000),
+    webhookRetryBaseMs,
+    webhookRetryMaxMs,
+    webhookClaimLeaseMs: parseBoundedInteger('WEBHOOK_CLAIM_LEASE_MS', process.env.WEBHOOK_CLAIM_LEASE_MS, 600_000, 30_000, 3_600_000),
+    webhookMaxManualReplays: parseBoundedInteger('WEBHOOK_MAX_MANUAL_REPLAYS', process.env.WEBHOOK_MAX_MANUAL_REPLAYS, 1, 1, 3),
     followupsFile: process.env.FOLLOWUPS_FILE ?? './data/followups.json',
     followUpClaimLeaseMs: parseBoundedInteger('FOLLOWUP_CLAIM_LEASE_MS', process.env.FOLLOWUP_CLAIM_LEASE_MS, 300_000, 30_000, 3_600_000),
     followUpMaxAttempts: parseBoundedInteger('FOLLOWUP_MAX_ATTEMPTS', process.env.FOLLOWUP_MAX_ATTEMPTS, 3, 1, 10),
