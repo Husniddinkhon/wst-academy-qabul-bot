@@ -144,5 +144,9 @@ vite.config.ts.timestamp-*
 
 # WST Academy bot
 /data/*.json
+/data/*.json.bak
+/data/*.json.bak.*
+/data/*.json.lock/
+/data/*.json.*.tmp
 !/data/.gitkeep
 /backups/

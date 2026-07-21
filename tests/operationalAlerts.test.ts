@@ -32,8 +32,27 @@ test('marks only successful admin deliveries and retries failed recipients with 
     assert.deepEqual(calls, [11, 22, 22]);
     const idempotent = await deliverOperationalAlert({ ...common, now: new Date('2026-07-15T05:02:00Z') });
     assert.deepEqual(idempotent, { attempted: 0, sent: 0, failed: 0, suppressed: false });
-    assert.equal((await stat(file)).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal((await stat(file)).mode & 0o777, 0o600);
     assert.doesNotMatch(await readFile(file, 'utf8'), /\b11\b|\b22\b|secret transport failure/);
+  } finally { await cleanup(); }
+});
+
+test('an idempotent delivered alert does not rewrite the primary or backup generation', async () => {
+  const { file, store, cleanup } = await fixture();
+  try {
+    const request = { key: 'no-op', message: 'Safe', adminIds: [44], sender: async () => undefined, store };
+    await deliverOperationalAlert({ ...request, now: new Date('2026-07-15T05:00:00Z') });
+    const beforePrimary = await readFile(file, 'utf8');
+    const beforeBackup = await readFile(`${file}.bak`, 'utf8');
+    const beforePrimaryMtime = (await stat(file)).mtimeMs;
+    const beforeBackupMtime = (await stat(`${file}.bak`)).mtimeMs;
+
+    const repeated = await deliverOperationalAlert({ ...request, now: new Date('2026-07-15T05:01:00Z') });
+    assert.deepEqual(repeated, { attempted: 0, sent: 0, failed: 0, suppressed: false });
+    assert.equal(await readFile(file, 'utf8'), beforePrimary);
+    assert.equal(await readFile(`${file}.bak`, 'utf8'), beforeBackup);
+    assert.equal((await stat(file)).mtimeMs, beforePrimaryMtime);
+    assert.equal((await stat(`${file}.bak`)).mtimeMs, beforeBackupMtime);
   } finally { await cleanup(); }
 });
 

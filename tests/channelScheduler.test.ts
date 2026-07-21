@@ -21,6 +21,14 @@ function sender(calls: { texts: number; photos: number }): ChannelSender {
   };
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error(`Condition was not met within ${timeoutMs}ms`);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 test('parses and formats Asia/Tashkent schedule deterministically', () => {
   assert.equal(parseTashkentSchedule('2026-07-15 10:00'), '2026-07-15T05:00:00.000Z');
   assert.equal(formatTashkentSchedule(new Date('2026-07-15T05:00:00.000Z')), '2026-07-15 10:00');
@@ -157,7 +165,7 @@ test('actionable Failed reconciliation still alerts when the scheduler run itsel
       store: new JsonOperationalAlertStore(path.join(alertDirectory, 'alerts.json')),
       adminIds: [1],
     });
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await waitFor(() => calls.length > 0);
     clearInterval(timer);
     assert.equal(calls.length, 1);
     assert.match(calls[0], new RegExp(post.id));

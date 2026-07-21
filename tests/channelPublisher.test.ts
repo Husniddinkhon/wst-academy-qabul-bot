@@ -84,7 +84,7 @@ test('verified local channel image resolves only inside the configured asset roo
     };
     const result = await publishChannelPost(store, sender, '-1001', post.id, 23, false, { assetRoot: '/safe/assets', allowedHttpsHosts: [] });
     assert.equal(result.ok, true);
-    assert.deepEqual(photo, { source: '/safe/assets/series/image.png', filename: 'image.png' });
+    assert.deepEqual(photo, { source: path.resolve('/safe/assets', 'series/image.png'), filename: 'image.png' });
 
     const traversal = await store.createFromSource('Traversal must be rejected before Telegram', { kind: 'local_path', value: '../secret.png' }, 12, 'technical-2');
     const blocked = await publishChannelPost(store, sender, '-1001', traversal.id, 23, false, { assetRoot: '/safe/assets', allowedHttpsHosts: [] });

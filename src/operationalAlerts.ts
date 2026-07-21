@@ -1,14 +1,11 @@
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, rmdir, stat } from 'node:fs/promises';
-import { atomicWriteJson, readJson } from './safeJson.js';
-import path from 'node:path';
+import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
 import type { JsonChannelPostStore } from './channelPosts.js';
 import type { ChannelSender } from './channelPublisher.js';
 
 const ALERT_LEASE_MS = 2 * 60_000;
 const BASE_RETRY_MS = 60_000;
 const MAX_RETRY_MS = 60 * 60_000;
-const LOCK_STALE_MS = 2 * 60_000;
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const CHANNEL_FAILURE_ACTION_WINDOW_MS = 24 * 60 * 60_000;
 
@@ -138,10 +135,11 @@ export class JsonOperationalAlertStore {
     const result = new Promise<T>((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
     const run = async () => {
       try {
-        await this.withFileLock(async () => {
+        await withFileLock(this.filePath, async () => {
           const db = await this.read();
+          const before = JSON.stringify(db);
           const value = operation(db);
-          await this.write(db);
+          if (JSON.stringify(db) !== before) await this.write(db);
           resolveResult(value);
         });
       } catch (error) { rejectResult(error); }
@@ -149,27 +147,6 @@ export class JsonOperationalAlertStore {
     this.mutationQueue = this.mutationQueue.then(run, run);
     await this.mutationQueue;
     return result;
-  }
-
-  private async withFileLock<T>(operation: () => Promise<T>): Promise<T> {
-    const lockPath = `${this.filePath}.lock`;
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    await chmod(path.dirname(this.filePath), 0o700);
-    const startedAt = Date.now();
-    while (true) {
-      try {
-        await mkdir(lockPath);
-        await chmod(lockPath, 0o700);
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        const lockStat = await stat(lockPath).catch(() => undefined);
-        if (lockStat && Date.now() - lockStat.mtimeMs > LOCK_STALE_MS) await rmdir(lockPath).catch(() => undefined);
-        if (Date.now() - startedAt > 5_000) throw new Error('Operational alert state lock timed out.');
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    }
-    try { return await operation(); } finally { await rmdir(lockPath).catch(() => undefined); }
   }
 
   private async read(): Promise<AlertDatabase> {

@@ -57,5 +57,14 @@ test('systemd failure notifier is non-recursive and uses the durable protected s
   assert.match(notifier, /UMask=0077/);
   assert.match(notifier, /ReadWritePaths=\/opt\/wst-academy-qabul-bot\/data/);
   assert.doesNotMatch(notifier, /OnFailure=/);
-  assert.equal(dropIn.trim(), '[Unit]\nOnFailure=wst-academy-ops-alert@%n.service');
+  assert.equal(dropIn.replace(/\r\n/g, '\n').trim(), '[Unit]\nOnFailure=wst-academy-ops-alert@%n.service');
+});
+
+test('runtime JSON recovery artifacts and lock directories stay outside Git', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const ignore = readFileSync(path.join(root, '.gitignore'), 'utf8');
+  assert.match(ignore, /^\/data\/\*\.json\.bak$/m);
+  assert.match(ignore, /^\/data\/\*\.json\.bak\.\*$/m);
+  assert.match(ignore, /^\/data\/\*\.json\.lock\/$/m);
+  assert.match(ignore, /^\/data\/\*\.json\.\*\.tmp$/m);
 });
