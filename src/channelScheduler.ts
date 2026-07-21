@@ -5,18 +5,21 @@ import { alertActionableChannelFailures, type JsonOperationalAlertStore } from '
 export const CHANNEL_TIME_ZONE = 'Asia/Tashkent';
 export const SCHEDULER_PUBLISHER_ID = 0;
 
-export interface SchedulerRunResult { recovered: number; claimed: number; published: number; failed: number }
+export interface SchedulerRunResult { recovered: number; claimed: number; published: number; failed: number; uncertain: number; retryWait: number }
 export interface SchedulerAlertOptions { store: JsonOperationalAlertStore; adminIds: number[] }
 
 export async function runChannelSchedulerOnce(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, now = new Date(), staleClaimMs = 10 * 60_000, mediaPolicy?: ChannelMediaPolicy): Promise<SchedulerRunResult> {
-  const recovered = await store.recoverStalePublishing(new Date(now.getTime() - staleClaimMs));
-  const result = { recovered: recovered.length, claimed: 0, published: 0, failed: 0 };
+  const [recovered] = await Promise.all([store.recoverExpiredClaims(now), store.closeExpiredReconciliationWindows(now)]);
+  const result = { recovered: recovered.length, claimed: 0, published: 0, failed: 0, uncertain: recovered.filter((post) => post.status === 'Uncertain').length, retryWait: recovered.filter((post) => post.status === 'RetryWait').length };
   for (let i = 0; i < 20; i += 1) {
-    const claim = await store.claimNextDue(now, SCHEDULER_PUBLISHER_ID);
+    const claim = await store.claimNextDue(now, SCHEDULER_PUBLISHER_ID, { workerId: `channel-scheduler:${process.pid}`, leaseMs: staleClaimMs });
     if (!claim.ok) break;
     result.claimed += 1;
-    const published: PublishResult = await publishClaimedChannelPost(store, sender, channelChatId, claim.post, claim.attemptId, now, mediaPolicy);
-    if (published.ok) result.published += 1; else result.failed += 1;
+    const published: PublishResult = await publishClaimedChannelPost(store, sender, channelChatId, claim.post, claim.attemptId, now, mediaPolicy, claim.claimToken, { claimLeaseMs: staleClaimMs });
+    if (published.ok) result.published += 1;
+    else if (published.reason === 'outcome_uncertain') result.uncertain += 1;
+    else if (published.reason === 'retry_wait') result.retryWait += 1;
+    else result.failed += 1;
   }
   return result;
 }

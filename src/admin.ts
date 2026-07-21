@@ -76,7 +76,9 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       '/channel_publish <id> — draftni kanalga yuborish',
       '/channel_schedule <id> <YYYY-MM-DD> <HH:mm> [campaign] — admin tasdiqlagan postni Toshkent vaqti bilan rejalash',
       '/channel_cancel <id> — rejalangan postni bekor qilish',
-      '/channel_retry <id> — xato bo‘lgan postni qayta yuborish',
+      '/channel_retry <id> [reason] — definitive failure retry; Uncertain uchun audited sabab kerak',
+      '/channel_reconcile <id> published <message_id> <note> — Telegram message ID bilan tasdiqlash',
+      '/channel_reconcile <id> not_published <note> — kanal dalili bilan yuborilmaganini tasdiqlash',
       '/channel_report — subscriber, post va lead hisoboti',
       '/leads_today — bugungi leadlar',
       '/last_leads — oxirgi 10 lead',
@@ -222,13 +224,20 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
     const channelLeads = leads.filter((lead) => lead.source === 'channel').length;
     const adsLeads = leads.filter((lead) => lead.source === 'telegram_ads').length;
     const activeStudents = leads.filter((lead) => lead.studentStatus === 'Active').length;
-    return ctx.reply(['📣 Channel report', `Obunachilar: ${memberResponse.ok ? memberResponse.result : 'ERROR'}`, `Draft: ${postStats.Draft}`, `Scheduled: ${postStats.Scheduled}`, `Due: ${postStats.due}`, `Publishing: ${postStats.Publishing}`, `Published: ${postStats.Published}`, `Failed/manual review: ${postStats.Failed}`, `Cancelled: ${postStats.Cancelled}`, `Channel leadlar: ${channelLeads}`, `Telegram Ads leadlar: ${adsLeads}`, `Active studentlar: ${activeStudents}`].join('\n'));
+    return ctx.reply(['📣 Channel report', `Obunachilar: ${memberResponse.ok ? memberResponse.result : 'ERROR'}`, `Draft: ${postStats.Draft}`, `Scheduled: ${postStats.Scheduled}`, `Due: ${postStats.due}`, `Claimed: ${postStats.Claimed}`, `Publishing: ${postStats.Publishing}`, `Uncertain/manual review: ${postStats.Uncertain}`, `Retry wait: ${postStats.RetryWait}`, `Published: ${postStats.Published}`, `Failed: ${postStats.Failed}`, `Cancelled: ${postStats.Cancelled}`, `Channel leadlar: ${channelLeads}`, `Telegram Ads leadlar: ${adsLeads}`, `Active studentlar: ${activeStudents}`].join('\n'));
   });
 
   const publish = async (ctx: BotContext, retryFailed: boolean): Promise<unknown> => {
     if (!(await guard(ctx))) return;
-    const id = commandText(ctx).split(/\s+/)[1]?.trim();
-    if (!id || !ctx.from?.id) return ctx.reply(`Format: /channel_${retryFailed ? 'retry' : 'publish'} <id>`);
+    const [, id, ...reasonParts] = commandText(ctx).trim().split(/\s+/);
+    if (!id || !ctx.from?.id) return ctx.reply(`Format: /channel_${retryFailed ? 'retry' : 'publish'} <id>${retryFailed ? ' [reason]' : ''}`);
+    const current = await channelPosts.get(id);
+    if (retryFailed && current?.status === 'Uncertain') {
+      const reason = reasonParts.join(' ').trim();
+      if (reason.length < 8) return ctx.reply(`Uncertain postni qayta yuborishdan oldin kanalni tekshiring va sabab yozing: /channel_retry ${id} <kamida 8 belgi sabab>`);
+      const override = await channelPosts.authorizeUncertainOverride(id, ctx.from.id, reason, currentUpdateIdempotencyKey(`channel:override:${id}`));
+      if (!override.ok) return ctx.reply(`Controlled override rad etildi. Holat: ${override.post?.status ?? 'unknown'}.`);
+    }
     const result = await publishChannelPost(channelPosts, bot.telegram, channelChatId, id, ctx.from.id, retryFailed, channelMediaPolicy, currentUpdateIdempotencyKey(`channel:${retryFailed ? 'retry' : 'publish'}:${id}`));
     if (result.ok) return ctx.reply(`Kanalga yuborildi: ${result.post.id}, message ${result.post.publishedMessageId}`);
     if (result.reason === 'send_failed') {
@@ -236,12 +245,33 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
       return ctx.reply(`Kanalga yuborilmadi: ${result.error}\nQayta urinish: /channel_retry ${id}`);
     }
     if (result.reason === 'campaign_expired') return ctx.reply(`Post yuborilmadi: aksiya muddati tugagan. ${result.error}`);
+    if (result.reason === 'outcome_uncertain') return ctx.reply(`Telegram natijasi noaniq. Avtomatik retry bloklandi: ${id}. Kanalni tekshiring va /channel_reconcile dan foydalaning.`);
+    if (result.reason === 'retry_wait') return ctx.reply(`Telegram vaqtincha qabul qilmadi. Post bounded retry navbatida: ${id}.`);
     if (result.reason === 'not_found') return ctx.reply('Post topilmadi.');
     return ctx.reply(`Post yuborib bo‘lmaydi. Hozirgi holat: ${result.post?.status ?? 'unknown'}.`);
   };
 
   bot.command('channel_publish', (ctx) => publish(ctx, false));
   bot.command('channel_retry', (ctx) => publish(ctx, true));
+  bot.command('channel_reconcile', async (ctx) => {
+    if (!(await guard(ctx))) return;
+    const [, id, outcome, ...rest] = commandText(ctx).trim().split(/\s+/);
+    if (!id || !outcome || !ctx.from?.id) return ctx.reply('Format: /channel_reconcile <id> published <message_id> <note> yoki /channel_reconcile <id> not_published <note>');
+    if (outcome === 'published') {
+      const messageId = Number(rest.shift());
+      const note = rest.join(' ').trim();
+      if (!Number.isSafeInteger(messageId) || messageId <= 0 || note.length < 8) return ctx.reply('Format: /channel_reconcile <id> published <message_id> <kamida 8 belgi note>');
+      const result = await channelPosts.reconcileUncertain(id, { outcome: 'published', actorId: ctx.from.id, messageId, note }, currentUpdateIdempotencyKey(`channel:reconcile:${id}`));
+      return ctx.reply(result.ok ? `Post Published deb reconciled qilindi: ${id}, message ${messageId}.` : `Reconciliation rad etildi. Holat: ${result.post?.status ?? result.reason}.`);
+    }
+    if (outcome === 'not_published') {
+      const note = rest.join(' ').trim();
+      if (note.length < 8) return ctx.reply('Format: /channel_reconcile <id> not_published <kamida 8 belgi note>');
+      const result = await channelPosts.reconcileUncertain(id, { outcome: 'not_published', actorId: ctx.from.id, note }, currentUpdateIdempotencyKey(`channel:reconcile:${id}`));
+      return ctx.reply(result.ok ? `Yuborilmagani tasdiqlandi; controlled retry ruxsat etildi: ${id}.` : `Reconciliation rad etildi. Holat: ${result.post?.status ?? result.reason}.`);
+    }
+    return ctx.reply('Outcome published yoki not_published bo‘lishi kerak.');
+  });
 
   bot.command('leads_today', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList(await store.today(), 'Bugun hali lead yo‘q.')); });
   bot.command('last_leads', async (ctx) => { if (!(await guard(ctx))) return; return ctx.reply(formatLeadList(await store.last(10), 'Hali lead yo‘q.')); });

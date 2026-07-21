@@ -36,9 +36,14 @@ export interface OperationalReportDependencies {
 
 const EMPTY_CONTENT_COUNTS: OperationalContentSnapshot['counts'] = {
   Draft: 0,
+  PendingApproval: 0,
+  Approved: 0,
   Scheduled: 0,
+  Claimed: 0,
   Publishing: 0,
   Published: 0,
+  Uncertain: 0,
+  RetryWait: 0,
   Failed: 0,
   Cancelled: 0,
   due: 0,
@@ -74,6 +79,9 @@ export async function buildOperationalReport(
 
   const degraded = unavailableSections.length > 0 || !bot.botReachable || !bot.channelReachable;
   const needsAttention = content.counts.Failed > 0
+    || content.counts.Uncertain > 0
+    || content.counts.RetryWait > 0
+    || content.counts.Claimed > 0
     || content.counts.Publishing > 0
     || content.counts.due > 0
     || (sales?.webhookFailuresQueued ?? 0) > 0
@@ -106,10 +114,10 @@ export function formatOperationalReport(snapshot: OperationalReportSnapshot): st
     '',
     'Content pipeline',
     content.available
-      ? `Draft ${content.counts.Draft} | Scheduled ${content.counts.Scheduled} | Due ${content.counts.due} | Publishing ${content.counts.Publishing}`
+      ? `Draft ${content.counts.Draft} | Scheduled ${content.counts.Scheduled} | Due ${content.counts.due} | Claimed ${content.counts.Claimed} | Publishing ${content.counts.Publishing}`
       : 'Content storage: UNAVAILABLE',
     content.available
-      ? `Published ${content.counts.Published} | Failed/manual review ${content.counts.Failed} | Cancelled ${content.counts.Cancelled}`
+      ? `Published ${content.counts.Published} | Uncertain ${content.counts.Uncertain} | Retry ${content.counts.RetryWait} | Failed ${content.counts.Failed} | Cancelled ${content.counts.Cancelled}`
       : undefined,
     content.nextScheduledAt
       ? `Next: ${formatTashkentDateTime(content.nextScheduledAt)}${content.nextContentKey ? ` | ${content.nextContentKey}` : ''}`
@@ -151,7 +159,7 @@ function summarizeContent(posts: ChannelPost[], now: Date): OperationalContentSn
   const counts = { ...EMPTY_CONTENT_COUNTS };
   for (const post of posts) {
     counts[post.status] += 1;
-    if (post.status === 'Scheduled' && post.scheduledAt && new Date(post.scheduledAt) <= now) counts.due += 1;
+    if ((post.status === 'Scheduled' || post.status === 'RetryWait') && post.scheduledAt && new Date(post.scheduledAt) <= now && (!post.nextRetryAt || new Date(post.nextRetryAt) <= now)) counts.due += 1;
   }
   const next = posts
     .filter((post) => post.status === 'Scheduled' && post.scheduledAt && new Date(post.scheduledAt) > now)

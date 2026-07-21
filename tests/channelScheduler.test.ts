@@ -74,14 +74,16 @@ test('restart recovery never automatically retries an unknown publishing outcome
     await store.schedule(post.id, '2026-07-15T05:00:00.000Z', 20);
     const claim = await store.claimNextDue(new Date('2026-07-15T05:01:00.000Z'));
     assert.equal(claim.ok, true);
+    if (!claim.ok) return;
+    await store.markSendStarted(post.id, claim.attemptId, claim.claimToken, '-1001', 'c'.repeat(64), new Date('2026-07-15T05:01:01.000Z'));
     const calls = { texts: 0, photos: 0 };
     const result = await runChannelSchedulerOnce(store, sender(calls), '-1001', new Date('2026-07-15T05:20:00.000Z'), 60_000);
     assert.deepEqual(calls, { texts: 0, photos: 0 });
     assert.equal(result.recovered, 1);
     assert.equal(result.claimed, 0);
     const saved = await store.get(post.id);
-    assert.equal(saved?.status, 'Failed');
-    assert.match(saved?.lastError ?? '', /inspect the channel before manual retry/);
+    assert.equal(saved?.status, 'Uncertain');
+    assert.match(saved?.lastError ?? '', /remote outcome is unknown/);
   } finally { await cleanup(); }
 });
 

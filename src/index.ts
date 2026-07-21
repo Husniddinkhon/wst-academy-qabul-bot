@@ -388,6 +388,7 @@ async function bootstrap(): Promise<void> {
     { command: 'channel_posts', description: 'Kanal postlari holati (admin)' },
     { command: 'channel_publish', description: 'Draftni kanalga yuborish (admin)' },
     { command: 'channel_retry', description: 'Xato kanal postini qayta yuborish (admin)' },
+    { command: 'channel_reconcile', description: 'Noaniq kanal yuborilishini reconciled qilish (admin)' },
     { command: 'channel_report', description: 'Kanal obunachi va lead hisoboti (admin)' },
     { command: 'leads_today', description: 'Bugungi leadlar (admin)' },
     { command: 'last_leads', description: 'Oxirgi leadlar (admin)' },
