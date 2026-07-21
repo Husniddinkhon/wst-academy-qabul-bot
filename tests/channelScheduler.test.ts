@@ -168,7 +168,7 @@ test('actionable Failed reconciliation still alerts when the scheduler run itsel
       adminIds: [1],
     });
     await waitFor(() => calls.length > 0);
-    clearInterval(timer);
+    await timer.stopAndDrain(1_000);
     assert.equal(calls.length, 1);
     assert.match(calls[0], new RegExp(post.id));
     assert.doesNotMatch(calls[0], /scheduler storage error|raw error excluded/);

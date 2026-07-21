@@ -30,6 +30,10 @@ export interface AppConfig {
   channelSchedulerEnabled: boolean;
   channelSchedulerPollMs: number;
   channelPublishStaleMs: number;
+  channelClaimLeaseMs: number;
+  channelClaimRenewMs: number;
+  channelUncertainWindowMs: number;
+  shutdownDrainTimeoutMs: number;
   channelAssetRoot: string;
   channelImageHosts: string[];
   isProduction: boolean;
@@ -90,6 +94,10 @@ export function loadConfig(): AppConfig {
   const fallbackValues = [process.env.AI_FALLBACK_API_KEY, process.env.AI_FALLBACK_BASE_URL, process.env.AI_FALLBACK_MODEL];
   const requestTimeoutMs = parseBoundedInteger('AI_REQUEST_TIMEOUT_MS', process.env.AI_REQUEST_TIMEOUT_MS, 15_000, 1_000, 60_000);
   const maxOutputTokens = parseBoundedInteger('AI_MAX_OUTPUT_TOKENS', process.env.AI_MAX_OUTPUT_TOKENS, 300, 32, 2_048);
+  const legacyChannelLease = process.env.CHANNEL_PUBLISH_STALE_MS;
+  const channelClaimLeaseMs = parseBoundedInteger(process.env.CHANNEL_CLAIM_LEASE_MS === undefined && legacyChannelLease !== undefined ? 'CHANNEL_PUBLISH_STALE_MS' : 'CHANNEL_CLAIM_LEASE_MS', process.env.CHANNEL_CLAIM_LEASE_MS ?? legacyChannelLease, 600_000, 60_000, 86_400_000);
+  const channelClaimRenewMs = parseBoundedInteger('CHANNEL_CLAIM_RENEW_MS', process.env.CHANNEL_CLAIM_RENEW_MS, 120_000, 5_000, 3_600_000);
+  if (channelClaimRenewMs >= channelClaimLeaseMs) throw new Error('CHANNEL_CLAIM_RENEW_MS must be shorter than CHANNEL_CLAIM_LEASE_MS.');
 
   if (!botToken) {
     throw new Error('BOT_TOKEN is required. Copy .env.example to .env and set your Telegram bot token.');
@@ -146,7 +154,11 @@ export function loadConfig(): AppConfig {
     opsAlertsFile: process.env.OPS_ALERTS_FILE || './data/ops_alerts.json',
     channelSchedulerEnabled: process.env.CHANNEL_SCHEDULER_ENABLED !== 'false',
     channelSchedulerPollMs: parseBoundedInteger('CHANNEL_SCHEDULER_POLL_MS', process.env.CHANNEL_SCHEDULER_POLL_MS, 30_000, 5_000, 300_000),
-    channelPublishStaleMs: parseBoundedInteger('CHANNEL_PUBLISH_STALE_MS', process.env.CHANNEL_PUBLISH_STALE_MS, 600_000, 60_000, 86_400_000),
+    channelPublishStaleMs: channelClaimLeaseMs,
+    channelClaimLeaseMs,
+    channelClaimRenewMs,
+    channelUncertainWindowMs: parseBoundedInteger('CHANNEL_UNCERTAIN_WINDOW_MS', process.env.CHANNEL_UNCERTAIN_WINDOW_MS, 86_400_000, 300_000, 604_800_000),
+    shutdownDrainTimeoutMs: parseBoundedInteger('SHUTDOWN_DRAIN_TIMEOUT_MS', process.env.SHUTDOWN_DRAIN_TIMEOUT_MS, 30_000, 1_000, 300_000),
     channelAssetRoot: process.env.CHANNEL_ASSET_ROOT?.trim() || './assets/channel',
     channelImageHosts: (process.env.CHANNEL_IMAGE_HOSTS || '').split(',').map((host) => host.trim().toLowerCase()).filter(Boolean),
     isProduction: process.env.NODE_ENV === 'production',

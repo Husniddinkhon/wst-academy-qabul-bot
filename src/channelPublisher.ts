@@ -23,9 +23,69 @@ export interface PublishAttemptOptions {
   claimRenewMs?: number;
   uncertainWindowMs?: number;
   now?: Date;
+  runtime?: PublisherRuntime;
+}
+
+interface ActivePublication {
+  key: string;
+  store: JsonChannelPostStore;
+  postId: string;
+  attemptId: string;
+  claimToken: string;
+  uncertainWindowMs?: number;
+}
+
+export interface PublisherDrainResult { drained: boolean; timedOut: boolean; activeAtTimeout: number; durationMs: number }
+
+export class PublisherRuntime {
+  private accepting = true;
+  private readonly active = new Map<string, ActivePublication>();
+  private readonly waiters = new Set<() => void>();
+
+  get isAccepting(): boolean { return this.accepting; }
+  get activeCount(): number { return this.active.size; }
+  stopAccepting(): void { this.accepting = false; }
+  assertAccepting(): void { if (!this.accepting) throw new PublisherStoppingError(); }
+
+  begin(active: Omit<ActivePublication, 'key'>): string {
+    this.assertAccepting();
+    const key = `${active.postId}:${active.attemptId}`;
+    this.active.set(key, { ...active, key });
+    return key;
+  }
+
+  finish(key: string | undefined): void {
+    if (!key) return;
+    this.active.delete(key);
+    if (this.active.size === 0) {
+      for (const resolve of this.waiters) resolve();
+      this.waiters.clear();
+    }
+  }
+
+  async drain(timeoutMs: number, now = new Date()): Promise<PublisherDrainResult> {
+    this.stopAccepting();
+    const started = Date.now();
+    if (this.active.size === 0) return { drained: true, timedOut: false, activeAtTimeout: 0, durationMs: Date.now() - started };
+    let timer: NodeJS.Timeout | undefined;
+    const drained = await Promise.race([
+      new Promise<true>((resolve) => this.waiters.add(() => resolve(true))),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (drained) return { drained: true, timedOut: false, activeAtTimeout: 0, durationMs: Date.now() - started };
+    const remaining = [...this.active.values()];
+    await Promise.allSettled(remaining.map((item) => item.store.abandonForShutdown(item.postId, item.attemptId, item.claimToken, now, item.uncertainWindowMs)));
+    return { drained: false, timedOut: true, activeAtTimeout: remaining.length, durationMs: Date.now() - started };
+  }
+}
+
+export class PublisherStoppingError extends Error {
+  constructor() { super('Publisher is stopping and will not accept new claims.'); this.name = 'PublisherStoppingError'; }
 }
 
 export async function publishChannelPost(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, id: string, publisherId: number, retryFailed = false, mediaPolicy = defaultMediaPolicy(), idempotencyKey?: string, options: PublishAttemptOptions = {}): Promise<PublishResult> {
+  options.runtime?.assertAccepting();
   const now = options.now ?? new Date();
   const claim = await store.claimForPublishing(id, publisherId, retryFailed, idempotencyKey, { workerId: options.workerId, leaseMs: options.claimLeaseMs, now });
   if (!claim.ok) return claim;
@@ -36,6 +96,13 @@ export async function publishChannelPost(store: JsonChannelPostStore, sender: Ch
 }
 
 export async function publishClaimedChannelPost(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, post: ChannelPost, attemptId: string, now = new Date(), mediaPolicy = defaultMediaPolicy(), claimToken = post.claimToken ?? '', options: PublishAttemptOptions = {}): Promise<PublishResult> {
+  let runtimeKey: string | undefined;
+  try {
+    runtimeKey = options.runtime?.begin({ store, postId: post.id, attemptId, claimToken, uncertainWindowMs: options.uncertainWindowMs });
+  } catch (error) {
+    await store.abandonForShutdown(post.id, attemptId, claimToken, now, options.uncertainWindowMs);
+    throw error;
+  }
   const blocked = campaignExpiryError(post, now);
   if (blocked) {
     const failed = await store.markFailed(post.id, attemptId, blocked, 'validation', claimToken, now);
@@ -82,6 +149,7 @@ export async function publishClaimedChannelPost(store: JsonChannelPostStore, sen
     return { ok: false, reason: 'send_failed', post: failed, error: message };
   } finally {
     if (renewal) clearInterval(renewal);
+    options.runtime?.finish(runtimeKey);
   }
 }
 

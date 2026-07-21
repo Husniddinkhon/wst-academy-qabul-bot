@@ -12,6 +12,7 @@ import { startFollowUpAutomation } from './followups.js';
 import { startDailyReport } from './dailyReport.js';
 import { PostgresFollowUpStore, PostgresLeadStore, PostgresStorage } from './postgres.js';
 import { JsonChannelPostStore } from './channelPosts.js';
+import { PublisherRuntime } from './channelPublisher.js';
 import { BACK_BUTTON, CALCULATOR_BUTTON, LESSON_BUTTON, MENU_BUTTON, NEXT_BUTTON, QUIZ, QUIZ_BUTTON, lessonKeyboard, lessonText, quizKeyboard, quizText, startCalculator, startLesson, startQuiz, storageTerabytes, validateCalculatorValue } from './learning.js';
 import { explicitLeadSource, parseStartAttribution, resetSessionForStart } from './startFlow.js';
 import { classifyProductLead, getProductSalesAnswer, isProductSalesQuestion, productLeadReason, UNV_CAMPAIGN_ID } from './productSales.js';
@@ -229,6 +230,7 @@ async function bootstrap(): Promise<void> {
   const failureStore = new JsonWebhookFailureStore(config.webhookFailedFile);
   const followUpStore = postgres ? new PostgresFollowUpStore(postgres) : new JsonFollowUpStore(config.followupsFile);
   const channelPosts = new JsonChannelPostStore(config.channelPostsFile);
+  const publisherRuntime = new PublisherRuntime();
   const operationalAlerts = new JsonOperationalAlertStore(config.opsAlertsFile);
   const opsAggregateServer = config.opsAggregatePort && config.opsAggregateServiceId && config.opsAggregateSecret
     ? startQabulOpsAggregateServer({ port: config.opsAggregatePort, serviceId: config.opsAggregateServiceId, secret: config.opsAggregateSecret, leads: store, alerts: operationalAlerts, followUps: followUpStore, webhookFailures: failureStore })
@@ -286,7 +288,12 @@ async function bootstrap(): Promise<void> {
         timeoutMs: config.academyReportTimeoutMs,
       })
     : undefined;
-  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken, channelMediaPolicy, academyMetrics, operationalAlerts);
+  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken, channelMediaPolicy, academyMetrics, operationalAlerts, {
+    runtime: publisherRuntime,
+    claimLeaseMs: config.channelClaimLeaseMs,
+    claimRenewMs: config.channelClaimRenewMs,
+    uncertainWindowMs: config.channelUncertainWindowMs,
+  });
 
   bot.on('photo', async (ctx) => {
     if (!isAdmin(ctx, config.adminIds)) return;
@@ -413,22 +420,28 @@ async function bootstrap(): Promise<void> {
   const leadSlaTimer = startLeadSlaEscalation(store, operationalAlerts, bot.telegram, config.adminIds);
   const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);
   const channelSchedulerTimer = config.channelSchedulerEnabled
-    ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelPublishStaleMs, channelMediaPolicy, { store: operationalAlerts, adminIds: config.adminIds })
+    ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelClaimLeaseMs, channelMediaPolicy, { store: operationalAlerts, adminIds: config.adminIds }, { runtime: publisherRuntime, claimRenewMs: config.channelClaimRenewMs, uncertainWindowMs: config.channelUncertainWindowMs })
     : undefined;
 
   let telegramUpdateRecoveryTimer: NodeJS.Timeout | undefined;
 
   const shutdown = async (signal: NodeJS.Signals) => {
-    console.log(`Received ${signal}. Stopping bot...`);
+    console.log(JSON.stringify({ event: 'shutdown_started', signal }));
+    bot.stop(signal);
+    channelSchedulerTimer?.stopAccepting();
+    publisherRuntime.stopAccepting();
     clearInterval(followUpTimer);
     if (telegramUpdateRecoveryTimer) clearInterval(telegramUpdateRecoveryTimer);
     clearInterval(leadSlaTimer);
     if (dailyReportTimer) clearInterval(dailyReportTimer);
-    if (channelSchedulerTimer) clearInterval(channelSchedulerTimer);
+    const [schedulerDrain, publisherDrain] = await Promise.all([
+      channelSchedulerTimer?.stopAndDrain(config.shutdownDrainTimeoutMs) ?? Promise.resolve({ drained: true, timedOut: false, durationMs: 0 }),
+      publisherRuntime.drain(config.shutdownDrainTimeoutMs),
+    ]);
+    console.log(JSON.stringify({ event: 'shutdown_drain_completed', scheduler: schedulerDrain, publisher: publisherDrain }));
     if (opsAggregateServer) await new Promise<void>((resolve) => opsAggregateServer.close(() => resolve()));
-    bot.stop(signal);
     if (postgres) await postgres.close();
-    process.exit(0);
+    process.exit(schedulerDrain.timedOut || publisherDrain.timedOut ? 1 : 0);
   };
 
   process.once('SIGINT', shutdown);

@@ -115,10 +115,17 @@ test('loads bounded channel scheduler controls', () => {
   process.env.CHANNEL_SCHEDULER_ENABLED = 'false';
   process.env.CHANNEL_SCHEDULER_POLL_MS = '45000';
   process.env.CHANNEL_PUBLISH_STALE_MS = '900000';
+  process.env.CHANNEL_CLAIM_RENEW_MS = '120000';
+  process.env.CHANNEL_UNCERTAIN_WINDOW_MS = '172800000';
+  process.env.SHUTDOWN_DRAIN_TIMEOUT_MS = '20000';
   const config = loadConfig();
   assert.equal(config.channelSchedulerEnabled, false);
   assert.equal(config.channelSchedulerPollMs, 45_000);
   assert.equal(config.channelPublishStaleMs, 900_000);
+  assert.equal(config.channelClaimLeaseMs, 900_000);
+  assert.equal(config.channelClaimRenewMs, 120_000);
+  assert.equal(config.channelUncertainWindowMs, 172_800_000);
+  assert.equal(config.shutdownDrainTimeoutMs, 20_000);
 });
 
 test('rejects unsafe channel scheduler controls', () => {
@@ -128,6 +135,13 @@ test('rejects unsafe channel scheduler controls', () => {
   process.env.CHANNEL_SCHEDULER_POLL_MS = '30000';
   process.env.CHANNEL_PUBLISH_STALE_MS = '0';
   assert.throws(() => loadConfig(), /CHANNEL_PUBLISH_STALE_MS/);
+});
+
+test('rejects claim renewal that is not shorter than the lease', () => {
+  process.env.BOT_TOKEN = 'test-token';
+  process.env.CHANNEL_CLAIM_LEASE_MS = '60000';
+  process.env.CHANNEL_CLAIM_RENEW_MS = '60000';
+  assert.throws(() => loadConfig(), /must be shorter/);
 });
 
 test('loads bounded durable Telegram update controls', () => {

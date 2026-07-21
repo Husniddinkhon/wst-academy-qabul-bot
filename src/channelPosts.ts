@@ -225,6 +225,20 @@ export class JsonChannelPostStore {
     });
   }
 
+  async abandonForShutdown(id: string, attemptId: string, claimToken: string, now = new Date(), uncertainWindowMs = DEFAULT_UNCERTAIN_WINDOW_MS): Promise<ChannelPost | undefined> {
+    return this.mutate((db) => {
+      const index = db.posts.findIndex((post) => post.id === id);
+      if (index < 0) return undefined;
+      const current = normalizePost(db.posts[index]);
+      if (!['Claimed', 'Publishing'].includes(current.status) || current.publishAttemptId !== attemptId || current.claimToken !== claimToken) return undefined;
+      const updated = current.status === 'Claimed' && !current.sendStartedAt
+        ? appendAudit({ ...clearClaim(current), status: 'RetryWait' as const, nextRetryAt: now.toISOString(), lastError: 'Shutdown drain expired before Telegram send started.', failureCategory: 'transient' as const }, { at: now.toISOString(), event: 'shutdown_released_pre_send_claim', workerId: current.claimWorkerId, attemptId })
+        : toUncertain(current, 'Shutdown drain expired after Telegram send started; remote outcome is unknown.', now, uncertainWindowMs, 'shutdown_send_outcome_uncertain');
+      db.posts[index] = updated;
+      return updated;
+    });
+  }
+
   async recoverExpiredClaims(now = new Date(), uncertainWindowMs = DEFAULT_UNCERTAIN_WINDOW_MS): Promise<ChannelPost[]> {
     return this.mutate((db) => {
       const recovered: ChannelPost[] = [];

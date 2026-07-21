@@ -1,5 +1,5 @@
 import type { JsonChannelPostStore } from './channelPosts.js';
-import { publishClaimedChannelPost, type ChannelMediaPolicy, type ChannelSender, type PublishResult } from './channelPublisher.js';
+import { publishClaimedChannelPost, type ChannelMediaPolicy, type ChannelSender, type PublishResult, type PublisherRuntime } from './channelPublisher.js';
 import { alertActionableChannelFailures, type JsonOperationalAlertStore } from './operationalAlerts.js';
 
 export const CHANNEL_TIME_ZONE = 'Asia/Tashkent';
@@ -7,15 +7,30 @@ export const SCHEDULER_PUBLISHER_ID = 0;
 
 export interface SchedulerRunResult { recovered: number; claimed: number; published: number; failed: number; uncertain: number; retryWait: number }
 export interface SchedulerAlertOptions { store: JsonOperationalAlertStore; adminIds: number[] }
+export interface ChannelSchedulerWorkerOptions {
+  runtime?: PublisherRuntime;
+  claimRenewMs?: number;
+  uncertainWindowMs?: number;
+  workerId?: string;
+  canClaim?: () => boolean;
+}
+export interface ChannelSchedulerDrainResult { drained: boolean; timedOut: boolean; durationMs: number }
+export interface ChannelSchedulerHandle {
+  readonly isAccepting: boolean;
+  readonly isRunning: boolean;
+  stopAccepting(): void;
+  stopAndDrain(timeoutMs: number): Promise<ChannelSchedulerDrainResult>;
+}
 
-export async function runChannelSchedulerOnce(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, now = new Date(), staleClaimMs = 10 * 60_000, mediaPolicy?: ChannelMediaPolicy): Promise<SchedulerRunResult> {
+export async function runChannelSchedulerOnce(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, now = new Date(), staleClaimMs = 10 * 60_000, mediaPolicy?: ChannelMediaPolicy, options: ChannelSchedulerWorkerOptions = {}): Promise<SchedulerRunResult> {
   const [recovered] = await Promise.all([store.recoverExpiredClaims(now), store.closeExpiredReconciliationWindows(now)]);
   const result = { recovered: recovered.length, claimed: 0, published: 0, failed: 0, uncertain: recovered.filter((post) => post.status === 'Uncertain').length, retryWait: recovered.filter((post) => post.status === 'RetryWait').length };
   for (let i = 0; i < 20; i += 1) {
-    const claim = await store.claimNextDue(now, SCHEDULER_PUBLISHER_ID, { workerId: `channel-scheduler:${process.pid}`, leaseMs: staleClaimMs });
+    if (options.canClaim && !options.canClaim()) break;
+    const claim = await store.claimNextDue(now, SCHEDULER_PUBLISHER_ID, { workerId: options.workerId ?? `channel-scheduler:${process.pid}`, leaseMs: staleClaimMs });
     if (!claim.ok) break;
     result.claimed += 1;
-    const published: PublishResult = await publishClaimedChannelPost(store, sender, channelChatId, claim.post, claim.attemptId, now, mediaPolicy, claim.claimToken, { claimLeaseMs: staleClaimMs });
+    const published: PublishResult = await publishClaimedChannelPost(store, sender, channelChatId, claim.post, claim.attemptId, now, mediaPolicy, claim.claimToken, { claimLeaseMs: staleClaimMs, claimRenewMs: options.claimRenewMs, uncertainWindowMs: options.uncertainWindowMs, runtime: options.runtime });
     if (published.ok) result.published += 1;
     else if (published.reason === 'outcome_uncertain') result.uncertain += 1;
     else if (published.reason === 'retry_wait') result.retryWait += 1;
@@ -24,18 +39,21 @@ export async function runChannelSchedulerOnce(store: JsonChannelPostStore, sende
   return result;
 }
 
-export function startChannelScheduler(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, pollMs: number, staleClaimMs: number, mediaPolicy?: ChannelMediaPolicy, alerts?: SchedulerAlertOptions): NodeJS.Timeout {
+export function startChannelScheduler(store: JsonChannelPostStore, sender: ChannelSender, channelChatId: string, pollMs: number, staleClaimMs: number, mediaPolicy?: ChannelMediaPolicy, alerts?: SchedulerAlertOptions, options: ChannelSchedulerWorkerOptions = {}): ChannelSchedulerHandle {
   let running = false;
+  let accepting = true;
+  let currentRun: Promise<void> | undefined;
+  const workerId = options.workerId ?? `channel-scheduler:${process.pid}`;
   const run = async () => {
-    if (running) return;
+    if (running || !accepting) return;
     running = true;
     try {
-      const result = await runChannelSchedulerOnce(store, sender, channelChatId, new Date(), staleClaimMs, mediaPolicy);
-      if (result.recovered || result.claimed || result.failed) console.info(JSON.stringify({ event: 'channel_scheduler_run', ...result }));
+      const result = await runChannelSchedulerOnce(store, sender, channelChatId, new Date(), staleClaimMs, mediaPolicy, { ...options, workerId, canClaim: () => accepting && (options.canClaim?.() ?? true) });
+      if (result.recovered || result.claimed || result.failed || result.uncertain || result.retryWait) console.info(JSON.stringify({ event: 'channel_scheduler_run', ...result }));
     } catch (error) {
       console.error('Channel scheduler failed:', error instanceof Error ? error.message : String(error));
     } finally {
-      if (alerts) {
+      if (accepting && alerts) {
         try {
           const alertResult = await alertActionableChannelFailures(store, sender, alerts.adminIds, alerts.store);
           if (alertResult.attempted > 0) console.info(JSON.stringify({ event: 'channel_failure_alert', attempted: alertResult.attempted, sent: alertResult.sent, failed: alertResult.failed }));
@@ -44,8 +62,27 @@ export function startChannelScheduler(store: JsonChannelPostStore, sender: Chann
       running = false;
     }
   };
-  void run();
-  return setInterval(run, pollMs);
+  const invoke = () => { currentRun = run().finally(() => { currentRun = undefined; }); };
+  invoke();
+  const timer = setInterval(invoke, pollMs);
+  return {
+    get isAccepting() { return accepting; },
+    get isRunning() { return running; },
+    stopAccepting() { accepting = false; clearInterval(timer); },
+    async stopAndDrain(timeoutMs: number) {
+      const started = Date.now();
+      accepting = false;
+      clearInterval(timer);
+      if (!currentRun) return { drained: true, timedOut: false, durationMs: Date.now() - started };
+      let timeout: NodeJS.Timeout | undefined;
+      const drained = await Promise.race([
+        currentRun.then(() => true as const),
+        new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), timeoutMs); }),
+      ]);
+      if (timeout) clearTimeout(timeout);
+      return { drained, timedOut: !drained, durationMs: Date.now() - started };
+    },
+  };
 }
 
 export function parseTashkentSchedule(value: string): string | undefined {
