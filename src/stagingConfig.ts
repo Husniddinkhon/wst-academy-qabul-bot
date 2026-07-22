@@ -10,6 +10,15 @@ export const STAGING_SECRET_KEYS = [
   'ACADEMY_DATA_DIR',
   'ACADEMY_MEDIA_DIR',
   'ACADEMY_BACKUP_DIR',
+  'ACADEMY_BACKUP_KEY',
+  'ACADEMY_BACKUP_S3_ENDPOINT',
+  'ACADEMY_BACKUP_S3_REGION',
+  'ACADEMY_BACKUP_S3_BUCKET',
+  'ACADEMY_BACKUP_S3_PREFIX',
+  'ACADEMY_BACKUP_S3_ACCESS_KEY_ID',
+  'ACADEMY_BACKUP_S3_SECRET_ACCESS_KEY',
+  'UNV_PROMOTION_START_DATE',
+  'UNV_PROMOTION_END_DATE',
 ] as const;
 
 export type StagingSecretKey = typeof STAGING_SECRET_KEYS[number];
@@ -64,6 +73,16 @@ export function loadStagingSecrets(filePath: string, repoRoot: string): StagingS
     if (value !== expected) throw new Error(`${key} must be ${expected}.`);
     assertPathInside(repoRoot, value, key);
   }
+  if (!/^https:\/\//.test(secrets.ACADEMY_BACKUP_S3_ENDPOINT)) throw new Error('ACADEMY_BACKUP_S3_ENDPOINT must use HTTPS.');
+  if (!secrets.ACADEMY_BACKUP_S3_REGION || secrets.ACADEMY_BACKUP_S3_REGION.length > 64 || !/^[a-z0-9-]+$/.test(secrets.ACADEMY_BACKUP_S3_REGION)) throw new Error('ACADEMY_BACKUP_S3_REGION is invalid.');
+  if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(secrets.ACADEMY_BACKUP_S3_BUCKET) || /^\d{1,3}(\.\d{1,3}){3}$/.test(secrets.ACADEMY_BACKUP_S3_BUCKET)) throw new Error('ACADEMY_BACKUP_S3_BUCKET is not a valid S3 bucket name.');
+  if (secrets.ACADEMY_BACKUP_S3_PREFIX.startsWith('/') || secrets.ACADEMY_BACKUP_S3_PREFIX.includes('..') || !secrets.ACADEMY_BACKUP_S3_PREFIX.endsWith('/')) throw new Error('ACADEMY_BACKUP_S3_PREFIX must be a relative, safe path ending with /.');
+  if (!secrets.ACADEMY_BACKUP_S3_ACCESS_KEY_ID || secrets.ACADEMY_BACKUP_S3_ACCESS_KEY_ID.length < 20) throw new Error('ACADEMY_BACKUP_S3_ACCESS_KEY_ID is too short.');
+  if (!secrets.ACADEMY_BACKUP_S3_SECRET_ACCESS_KEY || secrets.ACADEMY_BACKUP_S3_SECRET_ACCESS_KEY.length < 20) throw new Error('ACADEMY_BACKUP_S3_SECRET_ACCESS_KEY is too short.');
+  if (!/^[a-f0-9]{64}$/i.test(secrets.ACADEMY_BACKUP_KEY)) throw new Error('ACADEMY_BACKUP_KEY must be exactly 64 hex characters.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(secrets.UNV_PROMOTION_START_DATE) || Number.isNaN(Date.parse(secrets.UNV_PROMOTION_START_DATE))) throw new Error('UNV_PROMOTION_START_DATE must be a valid YYYY-MM-DD date.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(secrets.UNV_PROMOTION_END_DATE) || Number.isNaN(Date.parse(secrets.UNV_PROMOTION_END_DATE))) throw new Error('UNV_PROMOTION_END_DATE must be a valid YYYY-MM-DD date.');
+  if (new Date(secrets.UNV_PROMOTION_END_DATE) < new Date(secrets.UNV_PROMOTION_START_DATE)) throw new Error('UNV_PROMOTION_END_DATE must not be before UNV_PROMOTION_START_DATE.');
   return secrets;
 }
 
