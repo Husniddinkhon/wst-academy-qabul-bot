@@ -1,5 +1,6 @@
 import { loadConfig } from './config.js';
 import { discoverBackups, computeManifest, verifyManifest, copyToOffHost, restoreFromOffHost, cleanupRestore } from './backupManifest.js';
+import { cleanupS3Restore, copyToS3OffHost, loadS3ConfigFromEnv, parseS3Uri, restoreFromS3OffHost, S3BackupError } from './s3Backup.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir, hostname } from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,19 @@ function getBackupKey(config: { backupEncryptionKey?: string }): string {
   const hex = config.backupEncryptionKey;
   if (!hex) throw new Error('ACADEMY_BACKUP_KEY is required');
   return hex;
+}
+
+function isS3Uri(target: string): boolean {
+  return target.startsWith('s3://');
+}
+
+function requireS3Config(): ReturnType<typeof loadS3ConfigFromEnv> {
+  try {
+    return loadS3ConfigFromEnv();
+  } catch (err) {
+    if (err instanceof S3BackupError) throw err;
+    throw new S3BackupError('Failed to load S3 configuration from environment', 'S3_CONFIG_ERROR');
+  }
 }
 
 async function cmdDiscover(dataDir: string, migrationDir: string): Promise<void> {
@@ -38,14 +52,29 @@ async function cmdOffHost(dataDir: string, migrationDir: string, offHostDir: str
     process.exitCode = 1;
     return;
   }
-  await copyToOffHost(entries, offHostDir, key);
-  console.log(`Copied ${manifest.entryCount} encrypted backups to ${offHostDir}`);
-  console.log(`Manifest checksum: ${manifest.hash.slice(0, 16)}...`);
+  if (isS3Uri(offHostDir)) {
+    const s3Config = requireS3Config();
+    const { bucket, prefix } = parseS3Uri(offHostDir);
+    await copyToS3OffHost(entries, bucket, prefix, key, s3Config);
+    console.log(`Copied ${manifest.entryCount} encrypted backups to ${offHostDir}`);
+    console.log(`Manifest checksum: ${manifest.hash.slice(0, 16)}...`);
+  } else {
+    await copyToOffHost(entries, offHostDir, key);
+    console.log(`Copied ${manifest.entryCount} encrypted backups to ${offHostDir}`);
+    console.log(`Manifest checksum: ${manifest.hash.slice(0, 16)}...`);
+  }
 }
 
 async function cmdRehearse(offHostDir: string, restoreRoot: string, config: { backupEncryptionKey?: string }): Promise<void> {
   const key = getBackupKey(config);
-  const report = await restoreFromOffHost(offHostDir, restoreRoot, key);
+  let report: import('./backupManifest.js').RehearsalReport;
+  if (isS3Uri(offHostDir)) {
+    const s3Config = requireS3Config();
+    const { bucket, prefix } = parseS3Uri(offHostDir);
+    report = await restoreFromS3OffHost(bucket, prefix, restoreRoot, key, s3Config);
+  } else {
+    report = await restoreFromOffHost(offHostDir, restoreRoot, key);
+  }
   console.log(`Restored ${report.restored.length} entries in ${report.rtoMs}ms`);
   console.log(`All OK: ${report.allOk}`);
   if (!report.allOk) {
@@ -58,6 +87,17 @@ async function cmdRehearse(offHostDir: string, restoreRoot: string, config: { ba
 
 async function cmdFullRehearse(dataDir: string, migrationDir: string, offHostDir: string, config: { backupEncryptionKey?: string }): Promise<void> {
   const key = getBackupKey(config);
+  const useS3 = isS3Uri(offHostDir);
+  let s3Config: import('./s3Backup.js').S3TransportConfig | undefined;
+  let s3Bucket = '';
+  let s3Prefix = '';
+  if (useS3) {
+    s3Config = requireS3Config();
+    const parsed = parseS3Uri(offHostDir);
+    s3Bucket = parsed.bucket;
+    s3Prefix = parsed.prefix;
+  }
+
   console.log('Phase 1: Discovering backups...');
   const entries = await discoverBackups(dataDir, migrationDir);
   console.log(`  Found ${entries.length} backup artifacts`);
@@ -75,15 +115,28 @@ async function cmdFullRehearse(dataDir: string, migrationDir: string, offHostDir
   console.log(`  All ${manifest.entryCount} entries verified (${(manifest.totalSize / 1024).toFixed(1)} KB)`);
 
   console.log('Phase 4: Encrypting and copying to off-host...');
-  await copyToOffHost(entries, offHostDir, key);
+  if (useS3) {
+    await copyToS3OffHost(entries, s3Bucket!, s3Prefix!, key, s3Config!);
+  } else {
+    await copyToOffHost(entries, offHostDir, key);
+  }
   console.log(`  Stored at: ${offHostDir}`);
 
   console.log('Phase 5: Isolated restore rehearsal...');
   const restoreRoot = path.join(mkdtempSync(path.join(tmpdir(), 'backup-restore-')), 'restored');
   const start = Date.now();
-  const report = await restoreFromOffHost(offHostDir, restoreRoot, key);
+  let report: import('./backupManifest.js').RehearsalReport;
+  if (useS3) {
+    report = await restoreFromS3OffHost(s3Bucket!, s3Prefix!, restoreRoot, key, s3Config!);
+  } else {
+    report = await restoreFromOffHost(offHostDir, restoreRoot, key);
+  }
   const rto = Date.now() - start;
-  await cleanupRestore(restoreRoot);
+  if (useS3) {
+    await cleanupS3Restore(restoreRoot);
+  } else {
+    await cleanupRestore(restoreRoot);
+  }
 
   if (report.allOk) {
     console.log(`  SUCCESS: ${report.restored.length}/${report.restored.length} entries restored and verified`);
@@ -103,12 +156,14 @@ const USAGE = `
 Usage: tsx src/backupRehearsal.ts <command> [options]
 
 Commands:
-  discover              Create checksummed manifest of all backup artifacts
-  verify                Verify local backup integrity
-  offhost <dir>         Encrypt and copy backups to off-host directory
-  rehearse <dir> <out>  Restore and verify from off-host directory
-  full <dir>            Run full rehearsal (discover -> verify -> offhost -> restore)
-  help                  Show this help
+  discover                Create checksummed manifest of all backup artifacts
+  verify                  Verify local backup integrity
+  offhost <dir|s3://...>  Encrypt and copy backups to off-host directory or S3
+  rehearse <dir|s3://...> Restore and verify from off-host directory or S3
+  full <dir|s3://...>     Run full rehearsal (discover -> verify -> offhost -> restore)
+  help                    Show this help
+
+Use s3://bucket/prefix for S3-compatible storage (requires ACADEMY_BACKUP_S3_* env vars).
 `;
 
 async function main(): Promise<void> {
@@ -136,6 +191,9 @@ async function main(): Promise<void> {
       if (!dir) { console.error('Usage: tsx src/backupRehearsal.ts full <dir>'); process.exitCode = 1; break; }
       await cmdFullRehearse(dataDir, migrationDir, dir, config); break;
     }
+    case 'help':
+    case '--help':
+    case '-h':
     default:
       console.log(USAGE);
   }
