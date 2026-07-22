@@ -11,7 +11,22 @@ declare module 'node:crypto' {
   }
   export function createHash(algorithm: 'sha256'): Digest;
   export function createHmac(algorithm: 'sha256', key: string): Digest;
-  export function randomBytes(size: number): { toString(encoding: 'hex'): string };
+  export function randomBytes(size: number): Buffer;
+
+  interface CipherGCM {
+    update(data: Buffer, inputEncoding: 'utf8'): Buffer;
+    final(): Buffer;
+    getAuthTag(): Buffer;
+  }
+  interface DecipherGCM {
+    update(data: Buffer): Buffer;
+    update(data: Buffer, inputEncoding: undefined, outputEncoding: 'utf8'): string;
+    setAuthTag(tag: Buffer): void;
+    final(): Buffer;
+    final(outputEncoding: 'utf8'): string;
+  }
+  export function createCipheriv(algorithm: 'aes-256-gcm', key: Buffer, iv: Buffer): CipherGCM;
+  export function createDecipheriv(algorithm: 'aes-256-gcm', key: Buffer, iv: Buffer): DecipherGCM;
 }
 
 declare module 'node:fs/promises' {
@@ -118,8 +133,18 @@ declare const console: {
   error(...data: unknown[]): void;
 };
 
+interface Buffer {
+  toString(encoding: 'hex'): string;
+  toString(encoding: 'utf8'): string;
+  length: number;
+  slice(start?: number, end?: number): Buffer;
+}
 declare const Buffer: {
-  from(data: string, encoding?: string): unknown;
+  from(data: string, encoding?: string): Buffer;
+  from(data: Buffer): Buffer;
+  from(data: ArrayLike<number>): Buffer;
+  alloc(size: number): Buffer;
+  concat(list: Buffer[]): Buffer;
 };
 
 declare function fetch(input: string, init?: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;

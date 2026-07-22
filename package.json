@@ -8,6 +8,7 @@
     "build": "tsc",
     "backfill:lead-events": "tsx src/backfillEventsCli.ts",
     "migrate": "tsx src/migrationCli.ts",
+    "backup:rehearse": "tsx src/backupRehearsal.ts",
     "test": "tsx --test tests/*.test.ts",
     "content:render": "node scripts/render-channel-assets.mjs",
     "content:verify": "node scripts/verify-channel-assets.mjs",

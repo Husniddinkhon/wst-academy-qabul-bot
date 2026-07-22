@@ -59,6 +59,7 @@ export interface AppConfig {
   opsAggregatePort?: number;
   opsAggregateServiceId?: string;
   opsAggregateSecret?: string;
+  backupEncryptionKey?: string;
 }
 
 function parseBoolean(value: string | undefined): boolean {
@@ -244,6 +245,7 @@ export function loadConfig(): AppConfig {
     stagingMediaDir,
     stagingBackupDir,
     databaseUrl: process.env.DATABASE_URL || undefined,
+    backupEncryptionKey: process.env.ACADEMY_BACKUP_KEY || undefined,
     opsAggregatePort: opsAggregatePortRaw ? parseBoundedInteger('OPS_AGGREGATE_PORT', opsAggregatePortRaw, 8381, 1024, 65535) : undefined,
     opsAggregateServiceId,
     opsAggregateSecret,

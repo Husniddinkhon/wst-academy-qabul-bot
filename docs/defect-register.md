@@ -38,15 +38,10 @@ Wave 5.1 controlled staging QA found that the approved CSV allowlist still inclu
 
 | ID | Severity | Defect | Resolution evidence | Status |
 |---|---|---|---|---|
+| P1-12 | P1 | Backup/restore, off-host retention and RPO/RTO not proven by a restore rehearsal | `src/backupManifest.ts`: SHA-256 checksummed manifests, AES-256-GCM encrypted off-host copy; `src/backupRehearsal.ts`: full rehearsal CLI; `tests/backupRehearsal.test.ts`: 10 tests covering discovery, manifest, encryption round-trip, off-host copy/restore, hash verification, cleanup | Resolved locally; not deployed |
 | P1-11 | P1 | Deployment rollback backed up the newly built candidate rather than the previous release | `scripts/deploy-guard.sh`: backup moved before `npm ci`+`npm run build`; rollback guards against missing backup; `tests/deploymentConfig.test.ts` | Resolved locally; not deployed |
 | P1-09 | P1 | Generic webhook and AI endpoints allow unsafe egress configuration | Outbound egress policy commit `5afd576` | Resolved locally; not deployed |
 | P1-10 | P1 | Database DDL/import runs during application startup | Migration engine commit `a41e448` | Resolved locally; not deployed |
-
-## Preserved P1 backlog for later controlled waves
-
-| ID | Defect | Required future control | Current disposition |
-|---|---|---|---|
-| P1-12 | Backup/restore, off-host retention and RPO/RTO are not proven by a restore rehearsal | Checksummed manifests, encrypted off-host copy and isolated restore exercise | Preserved; production backup mutation prohibited |
 
 ## Wave 3.1B staging precheck resolved locally
 
@@ -63,4 +58,4 @@ Wave 5.1 controlled staging QA found that the approved CSV allowlist still inclu
 
 ## Release qualification
 
-Wave 5 completion qualifies only the local RBAC, scope, maker-checker, callback, masking, revocation, and authorization-audit controls for controlled staging QA. It does not make the bot production-ready or authorize deployment. P1-12 remains a release blocker until its own controlled repair and verification gates pass.
+Wave 5 completion together with P1-09 (egress), P1-10 (migration engine), P1-11 (deployment rollback), and P1-12 (backup rehearsal) qualifies the local RBAC, scope, maker-checker, callback, masking, revocation, authorization-audit, egress, migration, rollback, and backup controls for controlled staging QA. It does not make the bot production-ready or authorize deployment.
