@@ -50,7 +50,7 @@ export async function markRegistrationFollowUpOptIn(followUpStore: JsonFollowUpS
   return true;
 }
 
-export function createRegistrationScene(store: JsonLeadStore, adminIds: number[], leadWebhookUrl: string | undefined, failureStore: JsonWebhookFailureStore, followUpStore: JsonFollowUpStore, identities: JsonApplicantIdentityStore): Scenes.WizardScene<BotContext> {
+export function createRegistrationScene(store: JsonLeadStore, notificationRecipients: (lead: Lead) => Promise<number[]>, leadWebhookUrl: string | undefined, failureStore: JsonWebhookFailureStore, followUpStore: JsonFollowUpStore, identities: JsonApplicantIdentityStore): Scenes.WizardScene<BotContext> {
   return new Scenes.WizardScene<BotContext>(
     REGISTRATION_SCENE_ID,
     async (ctx) => {
@@ -180,7 +180,7 @@ export function createRegistrationScene(store: JsonLeadStore, adminIds: number[]
       const saved = await store.upsert(lead, currentUpdateIdempotencyKey('applicant:registration-complete'));
       if (await identities.maySendFollowUp(from.id)) await followUpStore.upsert({ telegramId: from.id, startedAt: saved.lead.createdAt, count: 0, registrationCompleted: true }, currentUpdateIdempotencyKey('followup:registration-complete'));
       await deliverLeadWebhook(leadWebhookUrl, failureStore, saved.created ? 'lead_created' : 'lead_updated', saved.lead, undefined, currentUpdateIdempotencyKey('webhook:registration-complete'));
-      await notifyAdmins(ctx, adminIds, saved.lead);
+      await notifyAdmins(ctx, await notificationRecipients(saved.lead), saved.lead);
       ctx.scene.session.leadDraft = undefined;
       await ctx.reply(['Arizangiz qabul qilindi.', 'Rozilik bergan bo\u2018lsangiz, operator siz bilan bog\u2018lanadi.', `Operator: ${courseInfo.operator}`, `Telefon: ${courseInfo.phone}`].join('\n'), mainMenu());
       return ctx.scene.leave();

@@ -40,8 +40,8 @@ export async function getTashkentDayLeads(store: JsonLeadStore, now: Date): Prom
   });
 }
 
-export function startDailyReport(bot: Telegraf<BotContext>, store: JsonLeadStore, adminIds: number[], enabled: boolean, hour: number): NodeJS.Timeout | undefined {
-  if (!enabled || adminIds.length === 0) return undefined;
+export function startDailyReport(bot: Telegraf<BotContext>, store: JsonLeadStore, recipients: number[] | (() => Promise<number[]>), enabled: boolean, hour: number): NodeJS.Timeout | undefined {
+  if (!enabled || (Array.isArray(recipients) && recipients.length === 0)) return undefined;
   let lastSentDate = '';
   let sending = false;
   return setInterval(async () => {
@@ -51,10 +51,12 @@ export function startDailyReport(bot: Telegraf<BotContext>, store: JsonLeadStore
     if (getTashkentHour(now) !== hour || lastSentDate === todayKey) return;
     sending = true;
     try {
+      const recipientIds = Array.isArray(recipients) ? recipients : await recipients();
+      if (recipientIds.length === 0) return;
       const leads = await getTashkentDayLeads(store, now);
       const byIntent = (intent: string) => leads.filter((lead) => lead.intent === intent).length;
       const text = ['📊 WST Academy Daily Report','',`New leads: ${leads.filter((l) => l.status === 'New').length}`,`Hot leads: ${leads.filter((l) => l.status === 'Hot').length}`,`Call requests: ${leads.filter((l) => l.status === 'CallRequested').length}`,`Completed registrations: ${leads.filter((l) => l.status === 'RegistrationCompleted').length}`,`No phone leads: ${leads.filter((l) => !l.phone).length}`,`Total leads today: ${leads.length}`,'','Top intents:',`- price: ${byIntent('price')}`,`- program: ${byIntent('program')}`,`- call request: ${byIntent('call request')}`,`- registration: ${byIntent('registration')}`].join('\n');
-      const deliveries = await Promise.allSettled(adminIds.map((id) => bot.telegram.sendMessage(id, text)));
+      const deliveries = await Promise.allSettled(recipientIds.map((id) => bot.telegram.sendMessage(id, text)));
       if (deliveries.some((delivery) => delivery.status === 'fulfilled')) lastSentDate = todayKey;
       else console.error(`Daily report delivery failed for all admins (${todayKey}, ${REPORT_TIME_ZONE}).`);
     } catch (error) {

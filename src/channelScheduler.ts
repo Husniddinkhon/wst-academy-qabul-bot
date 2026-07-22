@@ -6,7 +6,7 @@ export const CHANNEL_TIME_ZONE = 'Asia/Tashkent';
 export const SCHEDULER_PUBLISHER_ID = 0;
 
 export interface SchedulerRunResult { recovered: number; claimed: number; published: number; failed: number; uncertain: number; retryWait: number }
-export interface SchedulerAlertOptions { store: JsonOperationalAlertStore; adminIds: number[] }
+export interface SchedulerAlertOptions { store: JsonOperationalAlertStore; adminIds: number[] | (() => Promise<number[]>) }
 export interface ChannelSchedulerWorkerOptions {
   runtime?: PublisherRuntime;
   claimRenewMs?: number;
@@ -63,7 +63,8 @@ export function startChannelScheduler(store: JsonChannelPostStore, sender: Chann
     } finally {
       if (accepting && alerts) {
         try {
-          const alertResult = await alertActionableChannelFailures(store, sender, alerts.adminIds, alerts.store);
+          const recipientIds = Array.isArray(alerts.adminIds) ? alerts.adminIds : await alerts.adminIds();
+          const alertResult = await alertActionableChannelFailures(store, sender, recipientIds, alerts.store);
           if (alertResult.attempted > 0) console.info(JSON.stringify({ event: 'channel_failure_alert', attempted: alertResult.attempted, sent: alertResult.sent, failed: alertResult.failed }));
         } catch { console.error('Channel failure alert reconciliation failed.'); }
       }

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Telegraf, Scenes, session, Markup } from 'telegraf';
 import { loadConfig, runtimeEnvironmentEvent } from './config.js';
 import { formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
-import { isAdmin, notifyCallRequestLead, notifyScoredHotLead, registerAdminCommands } from './admin.js';
+import { notifyCallRequestLead, notifyScoredHotLead, registerAdminCommands } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, phoneRequestKeyboard, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
 import { answerWithAiAgent, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic, scoreLead } from './aiAgent.js';
@@ -22,11 +22,12 @@ import { createAcademyMetricsLoader } from './salesReporting.js';
 import { getBotLaunchOptions } from './botLaunch.js';
 import { launchWithShutdownGate } from './telegramLifecycle.js';
 import { JsonOperationalAlertStore } from './operationalAlerts.js';
-import { startLeadSlaEscalation } from './leadSla.js';
+import { leadReference, startLeadSlaEscalation } from './leadSla.js';
 import { startQabulOpsAggregateServer } from './opsAggregateServer.js';
 import { createTelegramUpdateMiddleware, currentUpdateIdempotencyKey, installIdempotentTelegramApi, JsonTelegramSessionStore, runCurrentUpdateEffect, startTelegramUpdateRecovery, TelegramUpdateJournal, telegramUpdateTimestamp } from './telegramUpdates.js';
 import { CONSENT_NOTICES, deriveAuthoritativeTelegramIdentity, JsonApplicantIdentityStore, withdrawnLeadAnonymizationPatch } from './applicantIdentity.js';
 import { maskPhone, validateApplicantMessage } from './applicantValidation.js';
+import { authorizationCallbackSecret, deriveAuthorizationActor, JsonAuthorizationStore } from './authorization.js';
 
 const callApplicationConsentKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('Roziman', 'call_consent_application_accept'), Markup.button.callback('Rad etaman', 'call_consent_application_decline')],
@@ -57,7 +58,7 @@ async function startCallRequestConsent(ctx: BotContext, identities: JsonApplican
 }
 
 
-async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, adminIds: number[], leadWebhookUrl: string | undefined, applicantId: string, phone: string, message: string): Promise<void> {
+async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, authorization: JsonAuthorizationStore, leadWebhookUrl: string | undefined, applicantId: string, phone: string, message: string): Promise<void> {
   const from = ctx.from;
   if (!from) return;
 
@@ -93,16 +94,16 @@ async function saveCallRequestLead(ctx: BotContext, store: JsonLeadStore, failur
   const saved = await store.upsert(lead, currentUpdateIdempotencyKey('applicant:call-request'));
   await deliverLeadWebhook(leadWebhookUrl, failureStore, 'call_request', saved.lead, undefined, currentUpdateIdempotencyKey('webhook:call-request'));
 
-  await notifyCallRequestLead(ctx, adminIds, {
-    username: from.username,
+  const recipients = await authorization.recipients('applicant.view.masked', { kind: 'applicant', id: applicantId });
+  await notifyCallRequestLead(ctx, recipients, {
+    applicantReference: leadReference(saved.lead),
     telegramId: from.id,
     phone: maskPhone(phone),
-    message: 'Explicit call request',
     reason: 'User asked for a call.',
   });
 }
 
-async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, identities: JsonApplicantIdentityStore): Promise<void> {
+async function answerSalesAgent(ctx: BotContext, message: string, config: ReturnType<typeof loadConfig>, store: JsonLeadStore, failureStore: JsonWebhookFailureStore, identities: JsonApplicantIdentityStore, authorization: JsonAuthorizationStore): Promise<void> {
   if (isUnrelatedTopic(message)) {
     await ctx.reply(getUnrelatedTopicAnswer(message), mainMenu());
     return;
@@ -140,12 +141,11 @@ async function answerSalesAgent(ctx: BotContext, message: string, config: Return
     store,
     failureStore,
     leadWebhookUrl: config.leadWebhookUrl,
-    notifyHotLead: (lead) => notifyScoredHotLead(ctx, config.adminIds, {
-      username: lead.username,
+    notifyHotLead: async (lead) => notifyScoredHotLead(ctx, await authorization.recipients('applicant.view.masked', { kind: 'applicant', id: lead.applicantId ?? lead.id, program: lead.goal, region: lead.city, campaign: lead.campaignId }), {
+      applicantReference: leadReference(lead),
       telegramId: lead.telegramId,
-      phone: lead.phone || undefined,
-      message: lead.lastMessage,
-      reason: lead.aiLeadReason || 'High sales intent.',
+      phone: maskPhone(lead.phone || undefined),
+      reason: 'High sales intent detected.',
     }),
   });
   }
@@ -230,11 +230,13 @@ async function bootstrap(): Promise<void> {
   const channelPosts = new JsonChannelPostStore(config.channelPostsFile);
   const publisherRuntime = new PublisherRuntime();
   const operationalAlerts = new JsonOperationalAlertStore(config.opsAlertsFile);
+  const authorization = new JsonAuthorizationStore(config.authorizationFile, authorizationCallbackSecret(config.botToken));
+  await authorization.bootstrapOwners(config.adminIds);
   const opsAggregateServer = config.opsAggregatePort && config.opsAggregateServiceId && config.opsAggregateSecret
     ? startQabulOpsAggregateServer({ port: config.opsAggregatePort, serviceId: config.opsAggregateServiceId, secret: config.opsAggregateSecret, leads: store, alerts: operationalAlerts, followUps: followUpStore, webhookFailures: failureStore })
     : undefined;
   const bot = new Telegraf<BotContext>(config.botToken);
-  const stage = new Scenes.Stage<BotContext>([createRegistrationScene(store, config.adminIds, config.leadWebhookUrl, failureStore, followUpStore, identities)]);
+  const stage = new Scenes.Stage<BotContext>([createRegistrationScene(store, (lead) => authorization.recipients('applicant.view.masked', { kind: 'applicant', id: lead.applicantId ?? lead.id, program: lead.goal, region: lead.city, campaign: lead.campaignId }), config.leadWebhookUrl, failureStore, followUpStore, identities)]);
   const updateJournal = new TelegramUpdateJournal(config.telegramUpdatesFile, {
     leaseMs: config.telegramUpdateLeaseMs,
     maxCompletedUpdates: config.telegramUpdateRetention,
@@ -329,7 +331,7 @@ async function bootstrap(): Promise<void> {
         timeoutMs: config.academyReportTimeoutMs,
       })
     : undefined;
-  registerAdminCommands(bot, store, config.adminIds, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken, channelMediaPolicy, academyMetrics, operationalAlerts, {
+  registerAdminCommands(bot, store, authorization, failureStore, config.leadWebhookUrl, channelPosts, config.channelChatId, config.botToken, channelMediaPolicy, academyMetrics, operationalAlerts, {
     runtime: publisherRuntime,
     claimLeaseMs: config.channelClaimLeaseMs,
     claimRenewMs: config.channelClaimRenewMs,
@@ -337,9 +339,10 @@ async function bootstrap(): Promise<void> {
   });
 
   bot.on('photo', async (ctx) => {
-    if (!isAdmin(ctx, config.adminIds)) return;
     const caption = ctx.message?.caption?.trim() ?? '';
     if (!caption.startsWith('/channel_photo')) return;
+    const decision = await authorization.authorize(deriveAuthorizationActor(ctx), 'publication.create', { kind: 'publication', channel: config.channelChatId }, correlationId(ctx, 'authorize:channel-photo'), new Date(telegramUpdateTimestamp(ctx.update)), undefined, 'telegram.command.channel_photo');
+    if (!decision.ok) { await ctx.reply('⛔ Bu amal uchun ruxsat mavjud emas.'); return; }
     const text = caption.replace(/^\/channel_photo(?:@\w+)?\s*/i, '').trim();
     const photos = ctx.message?.photo ?? [];
     const photoFileId = photos[photos.length - 1]?.file_id;
@@ -359,7 +362,7 @@ async function bootstrap(): Promise<void> {
     if (!verified.applicant.normalizedPhone) return ctx.reply('Telefon raqamini tasdiqlab bo‘lmadi.', phoneRequestKeyboard());
     if (!(await identities.mayProcessApplication(actor.telegramUserId)) || !(await identities.hasConsent(actor.telegramUserId, CONSENT_NOTICES.outbound))) return ctx.reply('Operator so‘rovi uchun ariza va bog‘lanish roziliklari faol bo‘lishi kerak.', mainMenu());
     ctx.session.waitingForCallPhone = undefined;
-    await saveCallRequestLead(ctx, store, failureStore, config.adminIds, config.leadWebhookUrl, pending.applicantId, verified.applicant.normalizedPhone, pending.message);
+    await saveCallRequestLead(ctx, store, failureStore, authorization, config.leadWebhookUrl, pending.applicantId, verified.applicant.normalizedPhone, pending.message);
     await ctx.reply('Rahmat. Tasdiqlangan telefon raqamingiz qabul qilindi. Roziligingizga muvofiq operator bog‘lanishi mumkin.', mainMenu());
   });
 
@@ -394,7 +397,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    await answerSalesAgent(ctx, message, config, store, failureStore, identities);
+    await answerSalesAgent(ctx, message, config, store, failureStore, identities, authorization);
   });
 
   bot.catch((error, ctx) => {
@@ -439,13 +442,21 @@ async function bootstrap(): Promise<void> {
     { command: 'webhook_failures', description: 'Webhook retry/dead-letter holatlari (admin)' },
     { command: 'replay_webhook', description: 'Webhook manual replay (admin)' },
     { command: 'lead', description: 'Leadni Telegram ID bilan topish (admin)' },
+    { command: 'lead_sensitive', description: 'Purpose bilan sensitive lead ko‘rish' },
     { command: 'set_status', description: 'Lead statusini yangilash (admin)' },
     { command: 'operator_note', description: 'Leadga operator izohi (admin)' },
     { command: 'channel_schedule', description: 'Tasdiqlangan postni rejalash (admin)' },
     { command: 'channel_cancel', description: 'Rejalangan postni bekor qilish (admin)' },
+    { command: 'approvals', description: 'Maker-checker so‘rovlarini ko‘rish' },
+    { command: 'approval', description: 'Bitta approval tafsilotini ko‘rish' },
+    { command: 'approve', description: 'Boshqa maker so‘rovini tasdiqlash' },
+    { command: 'reject', description: 'Boshqa maker so‘rovini rad etish' },
+    { command: 'roles', description: 'Durable role assignmentlarni ko‘rish' },
+    { command: 'role_assign', description: 'Maker-checker bilan role berish' },
+    { command: 'role_revoke', description: 'Maker-checker bilan role bekor qilish' },
   ];
   await bot.telegram.setMyCommands(publicCommands, { scope: { type: 'default' } });
-  await Promise.all(config.adminIds.map((chatId) => bot.telegram.setMyCommands([...publicCommands, ...adminCommands.slice(1)], { scope: { type: 'chat', chat_id: chatId } })));
+  await Promise.all((await authorization.privilegedRecipients()).map((chatId) => bot.telegram.setMyCommands([...publicCommands, ...adminCommands.slice(1)], { scope: { type: 'chat', chat_id: chatId } })));
 
   const followUpTimer = startFollowUpAutomation(bot, store, followUpStore, {
     claimLeaseMs: config.followUpClaimLeaseMs,
@@ -454,10 +465,10 @@ async function bootstrap(): Promise<void> {
     retryMaxMs: config.followUpRetryMaxMs,
     canSendNonEssential: (telegramId) => identities.maySendFollowUp(telegramId),
   });
-  const leadSlaTimer = startLeadSlaEscalation(store, operationalAlerts, bot.telegram, config.adminIds);
-  const dailyReportTimer = startDailyReport(bot, store, config.adminIds, config.dailyReportEnabled, config.dailyReportHour);
+  const leadSlaTimer = startLeadSlaEscalation(store, operationalAlerts, bot.telegram, () => authorization.recipients('applicant.view.masked', { kind: 'applicant' }));
+  const dailyReportTimer = startDailyReport(bot, store, () => authorization.recipients('applicant.audit.view', { kind: 'applicant' }), config.dailyReportEnabled, config.dailyReportHour);
   const channelSchedulerTimer = config.channelSchedulerEnabled
-    ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelClaimLeaseMs, channelMediaPolicy, { store: operationalAlerts, adminIds: config.adminIds }, { runtime: publisherRuntime, claimRenewMs: config.channelClaimRenewMs, uncertainWindowMs: config.channelUncertainWindowMs })
+    ? startChannelScheduler(channelPosts, bot.telegram, config.channelChatId, config.channelSchedulerPollMs, config.channelClaimLeaseMs, channelMediaPolicy, { store: operationalAlerts, adminIds: () => authorization.recipients('publication.reconcile', { kind: 'publication', channel: config.channelChatId }) }, { runtime: publisherRuntime, claimRenewMs: config.channelClaimRenewMs, uncertainWindowMs: config.channelUncertainWindowMs })
     : undefined;
 
   let telegramUpdateRecoveryTimer: NodeJS.Timeout | undefined;

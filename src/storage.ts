@@ -3,6 +3,11 @@ import { readFile } from 'node:fs/promises';
 import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
 import type { FollowUpState, Lead, LeadStatus, LeadWebhookEvent } from './types.js';
 
+export const APPROVED_APPLICANT_EXPORT_FIELDS: readonly (keyof Lead)[] = [
+  'applicantId', 'id', 'createdAt', 'updatedAt', 'fullName', 'phone', 'age', 'city', 'goal', 'preferredTime',
+  'status', 'studentStatus', 'source', 'campaignId', 'paymentStatus',
+];
+
 interface StoredLeadEffect { kind: 'upsert' | 'update'; result: LeadUpsertResult | Lead | undefined }
 interface LeadDatabase { leads: Lead[]; effects: Record<string, StoredLeadEffect>; }
 export type WebhookFailureState = 'RetryWait' | 'Claimed' | 'Uncertain' | 'DeadLetter';
@@ -108,6 +113,10 @@ export class JsonLeadStore {
     const exportLeads = leads ?? (await this.all());
     const headers: (keyof Lead)[] = ['id','createdAt','updatedAt','telegramId','username','firstName','lastName','fullName','phone','city','age','workStatus','experience','goal','paymentOption','status','source','campaignId','studentStatus','agentActionCount','lastAgentAction','lastAgentAt','aiLeadScore','aiLeadReason','intent','lastMessage','operatorNote','nextFollowUp','paymentStatus','preferredTime','notes'];
     return [headers.join(','), ...exportLeads.map((lead) => headers.map((h) => csvEscape(String(lead[h] ?? ''))).join(','))].join('\n');
+  }
+  async toApprovedApplicantCsv(leads?: Lead[]): Promise<string> {
+    const exportLeads = leads ?? (await this.all());
+    return [APPROVED_APPLICANT_EXPORT_FIELDS.join(','), ...exportLeads.map((lead) => APPROVED_APPLICANT_EXPORT_FIELDS.map((field) => csvEscape(String(lead[field] ?? ''))).join(','))].join('\n');
   }
   async getFunnelEventMetrics(_from: Date, _toExclusive: Date): Promise<FunnelEventMetrics> { return { available: false, leadCreationsTracked: 0, hotEscalations: 0, registrations: 0 }; }
   private async readDatabase(): Promise<LeadDatabase> { const parsed = await readJson<Partial<LeadDatabase>>(this.filePath, { leads: [], effects: {} }); return { leads: Array.isArray(parsed.leads) ? parsed.leads : [], effects: parsed.effects && typeof parsed.effects === 'object' ? parsed.effects : {} }; }

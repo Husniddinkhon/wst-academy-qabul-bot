@@ -26,11 +26,16 @@ Severity uses P0 Critical, P1 High, P2 Medium, and P3 Low. Closed entries requir
 | P1-04 | P1 | Scheduled follow-up delivery lacked per-recipient claims | Stable delivery ID, JSON/PostgreSQL token claims, pre-send state, retry ceiling, cancellation, restart/shutdown recovery; `tests/followups.test.ts`, `tests/postgres.test.ts` | Resolved locally; not deployed |
 | P1-05 | P1 | Failed-webhook records lacked retention and retry ceilings | Stable failure identity, bounded backoff/retention/attempts, dead letter, fail-closed stale claim, authorized manual replay; `tests/webhook.test.ts` | Resolved locally; not deployed |
 
+## Wave 5 resolved in the local repair branch
+
+| ID | Severity | Defect | Resolution evidence | Status |
+|---|---|---|---|---|
+| P1-07 | P1 | Flat `ADMIN_IDS` granted PII, admissions, approval, publishing, retry and export privileges | Durable default-deny roles/scopes, private authoritative actor, masked default views, bound maker-checker, signed callbacks, immediate revocation and privacy-safe allow/deny audit; `tests/authorization.test.ts`, `tests/channelAdminAuth.test.ts` | Resolved locally; not deployed |
+
 ## Preserved P1 backlog for later controlled waves
 
 | ID | Defect | Required future control | Current disposition |
 |---|---|---|---|
-| P1-07 | Flat `ADMIN_IDS` grants PII, admissions, approval, publishing, retry and export privileges | Default-deny roles, private-chat enforcement, maker-checker and actor audit | Preserved; RBAC and maker-checker excluded from Wave 3 |
 | P1-09 | Generic webhook and AI endpoints allow unsafe egress configuration | HTTPS-only host allowlists, credential/private-network rejection, signed versioned connectors | Preserved; outbound egress controls excluded from Wave 3 |
 | P1-10 | Database DDL/import runs during application startup | Separate owner-controlled migration command and rollback gate | Preserved; database migration redesign excluded from Wave 3 |
 | P1-11 | Deployment rollback backs up the newly built candidate rather than the previous release | Immutable release directories or verified pre-build snapshot and atomic switch | Preserved; deployment changes deferred |
@@ -51,4 +56,4 @@ Severity uses P0 Critical, P1 High, P2 Medium, and P3 Low. Closed entries requir
 
 ## Release qualification
 
-Wave 4 completion qualifies only the local identity, consent, ownership, validation, and minimization controls for controlled staging QA. It does not make the bot production-ready or authorize deployment. P1-07 and P1-09 through P1-12 remain release blockers until their own controlled repair and verification gates pass.
+Wave 5 completion qualifies only the local RBAC, scope, maker-checker, callback, masking, revocation, and authorization-audit controls for controlled staging QA. It does not make the bot production-ready or authorize deployment. P1-09 through P1-12 remain release blockers until their own controlled repair and verification gates pass.

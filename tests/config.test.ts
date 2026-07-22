@@ -224,6 +224,7 @@ test('staging derives all runtime files from isolated local directories', () => 
   assert.equal(config.channelChatId, '-1009876543210');
   assert.equal(config.leadsFile, '.staging-data\\leads.json');
   assert.equal(config.applicantIdentitiesFile, '.staging-data\\applicant_identities.json');
+  assert.equal(config.authorizationFile, '.staging-data\\authorization.json');
   assert.equal(config.webhookFailedFile, '.staging-data\\webhook_failed.json');
   assert.equal(config.followupsFile, '.staging-data\\followups.json');
   assert.equal(config.telegramUpdatesFile, '.staging-data\\telegram_updates.json');

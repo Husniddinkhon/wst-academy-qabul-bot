@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
-import { mergeLeadRecords } from '../src/storage.js';
+import { JsonLeadStore, mergeLeadRecords } from '../src/storage.js';
 import type { Lead } from '../src/types.js';
 
 const existing: Lead = {
@@ -48,4 +51,16 @@ test('specific new attribution replaces an older attribution', () => {
   assert.equal(merged.campaignId, 'unv-uho-p1');
   assert.equal(merged.goal, 'UNV camera');
   assert.equal(merged.phone, '+998971112233');
+});
+
+test('approved applicant export omits Telegram identity and private free-text fields', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'approved-export-'));
+  try {
+    const store = new JsonLeadStore(path.join(directory, 'leads.json'));
+    await store.add({ ...existing, applicantId: 'applicant-1', username: 'private_user', telegramId: 991234567, lastMessage: 'private applicant answer', operatorNote: 'private operator note', notes: 'private registration note' });
+    const csv = await store.toApprovedApplicantCsv();
+    assert.match(csv, /^applicantId,id,createdAt,/);
+    assert.doesNotMatch(csv, /telegramId|username|lastMessage|operatorNote|notes|private_user|private applicant answer|private operator note|private registration note|991234567/);
+    assert.match(csv, /applicant-1/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

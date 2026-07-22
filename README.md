@@ -10,19 +10,21 @@ Production-ready Telegram lead capture bot for WST Academy “0 dan ustagacha”
 - Three-module CCTV mini-lesson, five-question session-only quiz, and bounded camera-storage calculator
 - Step-by-step Uzbek-first registration with separate application, outbound-message, and follow-up consent
 - Durable internal applicant identity, verified self-shared Telegram contacts, conflict review, withdrawal, and `/withdraw_consent`
-- Admin notifications for every new lead
+- Role- and scope-authorized masked notifications for every new lead
 - `/id` command to discover Telegram user ID
-- Admin commands:
+- Durable role- and scope-authorized commands:
   - `/admin_help` — admin command reference
   - `/leads_today` — today's leads
   - `/last_leads` — latest 10 leads
   - `/hot_leads` — hot AI-scored leads
   - `/call_requests` — users who requested an operator call
-  - `/export_csv` — export all leads as CSV
+  - `/export_csv [approval_id]` — maker-checker protected all-lead CSV export
   - `/stats` — total, today, and last 7 days statistics
-  - `/lead <telegram_id>` — inspect one lead
-  - `/set_status <telegram_id> <status>` — update CRM status
-  - `/operator_note <telegram_id> <note>` — save operator notes
+  - `/lead <applicant_ref>` — inspect a masked lead
+  - `/lead_sensitive <applicant_ref> <purpose>` — purpose-bound sensitive view
+  - `/set_status <applicant_ref> <status>` — update CRM status
+  - `/operator_note <applicant_ref> <note>` — save operator notes
+  - `/approvals`, `/approve`, `/reject` — maker-checker workflow
   - `/retry_webhooks` — retry failed webhook deliveries
 - Daily admin report automation
 - Follow-up automation for leads who have not completed registration
@@ -73,6 +75,7 @@ BOT_TOKEN=your-real-bot-token
 ADMIN_IDS=123456789,987654321
 LEADS_FILE=./data/leads.json
 APPLICANT_IDENTITIES_FILE=./data/applicant_identities.json
+AUTHORIZATION_FILE=./data/authorization.json
 WEBHOOK_FAILED_FILE=./data/webhook_failed.json
 FOLLOWUPS_FILE=./data/followups.json
 TELEGRAM_UPDATES_FILE=./data/telegram_updates.json
@@ -86,7 +89,7 @@ DAILY_REPORT_HOUR=21
 NODE_ENV=production
 ```
 
-Use `/id` in the bot to find admin Telegram IDs, then add them to `ADMIN_IDS`. Admins can run `/admin_help` in Telegram to see command formats. Set `LEAD_WEBHOOK_URL` only if you want lead events posted to n8n, the Academy API, or another webhook receiver. `WEBHOOK_FAILED_FILE` stores failed webhook deliveries for `/retry_webhooks`, and `FOLLOWUPS_FILE` stores follow-up automation state. `DAILY_REPORT_ENABLED=false` disables the daily admin summary; `DAILY_REPORT_HOUR` accepts an hour from 0 to 23 and defaults to 21.
+Use `/id` to discover the initial owner identities. `ADMIN_IDS` is consumed only once when the durable authorization ledger is empty; it is never a continuing authorization check. Thereafter roles, scopes, expiry, revocation, and maker-checker state in `AUTHORIZATION_FILE` are authoritative. Privileged users can run `/admin_help` for command formats. Set `LEAD_WEBHOOK_URL` only if you want lead events posted to n8n, the Academy API, or another webhook receiver. `WEBHOOK_FAILED_FILE` stores failed webhook deliveries for `/retry_webhooks`, and `FOLLOWUPS_FILE` stores follow-up automation state. `DAILY_REPORT_ENABLED=false` disables the daily authorized summary; `DAILY_REPORT_HOUR` accepts an hour from 0 to 23 and defaults to 21.
 
 ### Signed Academy lead delivery
 
@@ -116,7 +119,7 @@ npm start
 
 ## Data storage
 
-Leads are stored locally in `data/leads.json` by default. The separate applicant identity and consent ledger defaults to `data/applicant_identities.json`; override it only with `APPLICANT_IDENTITIES_FILE`. Failed webhook deliveries and follow-up state default to `data/webhook_failed.json` and `data/followups.json`, configurable with `WEBHOOK_FAILED_FILE` and `FOLLOWUPS_FILE`. Telegram update claims, recoverable raw updates, and durable session state share `data/telegram_updates.json`, allowing one atomic commit per handled update. Keep every state file private; inactive sessions expire after 30 days.
+Leads are stored locally in `data/leads.json` by default. The separate applicant identity and consent ledger defaults to `data/applicant_identities.json`; the durable authorization ledger defaults to `data/authorization.json`. Override them only with `APPLICANT_IDENTITIES_FILE` and `AUTHORIZATION_FILE`. Failed webhook deliveries and follow-up state default to `data/webhook_failed.json` and `data/followups.json`, configurable with `WEBHOOK_FAILED_FILE` and `FOLLOWUPS_FILE`. Telegram update claims, recoverable raw updates, and durable session state share `data/telegram_updates.json`, allowing one atomic commit per handled update. Keep every state file private; inactive sessions expire after 30 days.
 
 The `data/*.json` files are ignored by Git to avoid committing personal lead data.
 
@@ -135,6 +138,8 @@ The secret-safe Wave 3.1B staging identity and channel-permission check is docum
 `npm run staging:precheck` command never polls or sends, edits, deletes, or publishes a Telegram message.
 Wave 4 applicant identity, purpose-specific consent, contact ownership, validation, minimization, migration, and withdrawal controls are documented in
 [`docs/wave-4-applicant-identity-consent.md`](docs/wave-4-applicant-identity-consent.md).
+Wave 5 roles, scopes, masked defaults, maker-checker, signed privileged callbacks, revocation, migration, and authorization audit controls are documented in
+[`docs/wave-5-admin-rbac-maker-checker.md`](docs/wave-5-admin-rbac-maker-checker.md).
 
 ## Deployment notes
 

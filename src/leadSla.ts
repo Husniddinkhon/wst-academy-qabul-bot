@@ -78,7 +78,7 @@ export function startLeadSlaEscalation(
   leadStore: Pick<JsonLeadStore, 'all'>,
   alertStore: JsonOperationalAlertStore,
   bot: Pick<Telegraf<BotContext>['telegram'], 'sendMessage'>,
-  adminIds: number[],
+  recipients: number[] | (() => Promise<number[]>),
   pollMs = DEFAULT_LEAD_SLA_POLL_MS,
 ): NodeJS.Timeout {
   let running = false;
@@ -86,7 +86,8 @@ export function startLeadSlaEscalation(
     if (running) return;
     running = true;
     try {
-      const result = await processLeadSlaEscalations(leadStore, alertStore, bot, adminIds);
+      const recipientIds = Array.isArray(recipients) ? recipients : await recipients();
+      const result = await processLeadSlaEscalations(leadStore, alertStore, bot, recipientIds);
       if (result.failed > 0) console.error(`Lead SLA alert delivery failed for ${result.failed}/${result.attempted} recipient attempts.`);
     } catch (error) {
       console.error('Lead SLA escalation failed:', error instanceof Error ? error.message : 'unknown error');
