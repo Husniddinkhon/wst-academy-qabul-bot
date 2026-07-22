@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { Telegraf, Scenes, session, Markup } from 'telegraf';
 import { loadConfig, runtimeEnvironmentEvent } from './config.js';
+import { EgressPolicy, type EgressConfig, EgressHttpClient } from './egressPolicy.js';
 import { formatCourseIntro, formatCourseProgram, formatLocationAndSchedule, formatPriceInfo, formatPrivacyInfo } from './course.js';
-import { notifyCallRequestLead, notifyScoredHotLead, registerAdminCommands } from './admin.js';
+import { notifyCallRequestLead, notifyScoredHotLead, registerAdminCommands, setAdminEgressHttpClient } from './admin.js';
 import { JsonFollowUpStore, JsonLeadStore, JsonWebhookFailureStore } from './storage.js';
 import { createRegistrationScene, mainMenu, phoneRequestKeyboard, REGISTRATION_SCENE_ID, sendStart } from './registration.js';
-import { answerWithAiAgent, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic, scoreLead } from './aiAgent.js';
+import { answerWithAiAgent, getTruthfulFallbackAnswer, getUnrelatedTopicAnswer, isCallRequest, isCallRequestCancel, isUnrelatedTopic, scoreLead, setAiEgressHttpClient } from './aiAgent.js';
 import { configureLeadWebhookRetryPolicy, configureLeadWebhookSigning, deliverLeadWebhook } from './webhook.js';
 import type { BotContext, BotSession, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
@@ -24,7 +26,7 @@ import { launchWithShutdownGate } from './telegramLifecycle.js';
 import { JsonOperationalAlertStore } from './operationalAlerts.js';
 import { leadReference, startLeadSlaEscalation } from './leadSla.js';
 import { startQabulOpsAggregateServer } from './opsAggregateServer.js';
-import { createTelegramUpdateMiddleware, currentUpdateIdempotencyKey, installIdempotentTelegramApi, JsonTelegramSessionStore, runCurrentUpdateEffect, startTelegramUpdateRecovery, TelegramUpdateJournal, telegramUpdateTimestamp } from './telegramUpdates.js';
+import { createTelegramUpdateMiddleware, currentUpdateIdempotencyKey, installIdempotentTelegramApi, JsonTelegramSessionStore, runCurrentUpdateEffect, startTelegramUpdateRecovery, TelegramUpdateJournal, telegramUpdateTimestamp, setTelegramEgressPolicy } from './telegramUpdates.js';
 import { CONSENT_NOTICES, deriveAuthoritativeTelegramIdentity, JsonApplicantIdentityStore, withdrawnLeadAnonymizationPatch } from './applicantIdentity.js';
 import { maskPhone, validateApplicantMessage } from './applicantValidation.js';
 import { authorizationCallbackSecret, deriveAuthorizationActor, JsonAuthorizationStore } from './authorization.js';
@@ -205,14 +207,69 @@ async function handleLearningText(ctx: BotContext, message: string): Promise<boo
   return false;
 }
 
+function egressConfigFromApp(config: ReturnType<typeof loadConfig>): EgressConfig {
+  return {
+    environment: config.environment,
+    stagingAllowedDestinations: [],
+    productionAllowedDestinations: [],
+    testMockTransport: false,
+    rateLimitDefaults: {
+      perDestinationMax: 30,
+      perDestinationWindowMs: 60_000,
+      perApplicantMax: 10,
+      perApplicantWindowMs: 60_000,
+      perActionMax: 20,
+      perActionWindowMs: 60_000,
+      burstCeiling: 5,
+      dailyMessageCeiling: 1000,
+      webhookRetryCeiling: config.webhookMaxAttempts,
+      externalHttpConcurrency: 10,
+      aiRequestCeiling: 6,
+    },
+    httpDefaults: {
+      connectTimeoutMs: 5_000,
+      readTimeoutMs: 10_000,
+      totalTimeoutMs: config.academyReportTimeoutMs + 5_000,
+      maxResponseBytes: 1_048_576,
+      maxRedirects: 5,
+      allowedContentTypes: ['application/json', 'text/plain', 'text/html'],
+      tlsVerify: true,
+      denyIpLiterals: true,
+      denyPrivateRanges: true,
+      denyUserinfo: true,
+      denyNonStandardPorts: true,
+      denyRedirectNonAllowlisted: true,
+    },
+  };
+}
+
+function createEgressAuditSink(egressAuditFile: string): (event: import('./egressPolicy.js').EgressAuditEvent) => void {
+  const dir = egressAuditFile.substring(0, Math.max(egressAuditFile.lastIndexOf('/'), egressAuditFile.lastIndexOf('\\')));
+  if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true });
+  return (event: import('./egressPolicy.js').EgressAuditEvent) => {
+    try {
+      appendFileSync(egressAuditFile, JSON.stringify(event) + '\n', 'utf-8');
+    } catch (error) {
+      console.error('Egress audit write failed:', error instanceof Error ? error.message : String(error));
+    }
+  };
+}
+
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const environmentEvent = runtimeEnvironmentEvent(config);
   if (environmentEvent) console.warn(JSON.stringify(environmentEvent));
+  const egressConfig = egressConfigFromApp(config);
+  const egressAuditFile = `${config.opsAlertsFile || 'data/ops'}.egress.ndjson`;
+  const egressPolicy = new EgressPolicy(egressConfig, createEgressAuditSink(egressAuditFile));
+  const egressHttpClient = new EgressHttpClient(egressPolicy, egressConfig.httpDefaults);
   configureLeadWebhookSigning(config.leadWebhookServiceId && config.leadWebhookSecret ? {
     serviceId: config.leadWebhookServiceId,
     secret: config.leadWebhookSecret,
   } : undefined);
+  const { setEgressHttpClient } = await import('./webhook.js');
+  setEgressHttpClient(egressHttpClient);
+  setAdminEgressHttpClient(egressHttpClient);
   configureLeadWebhookRetryPolicy({
     maxAttempts: config.webhookMaxAttempts,
     retentionMs: config.webhookRetentionMs,
@@ -243,6 +300,8 @@ async function bootstrap(): Promise<void> {
   });
 
   installIdempotentTelegramApi(bot.telegram);
+  setTelegramEgressPolicy(egressPolicy);
+  setAiEgressHttpClient(egressHttpClient);
   bot.use(createTelegramUpdateMiddleware(updateJournal));
   bot.use(session<BotSession, BotContext>({ store: new JsonTelegramSessionStore(updateJournal) }));
   bot.use(stage.middleware());

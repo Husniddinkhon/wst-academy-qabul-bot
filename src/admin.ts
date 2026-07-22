@@ -1,6 +1,7 @@
 import { Input } from 'telegraf';
 import type { BotContext, LeadStatus, StudentStatus } from './types.js';
 import { APPROVED_APPLICANT_EXPORT_FIELDS, type JsonLeadStore, type JsonWebhookFailureStore } from './storage.js';
+import type { EgressHttpClient } from './egressPolicy.js';
 import { formatLead, formatMaskedLead, formatMaskedLeadList } from './messages.js';
 import { deliverLeadWebhook, getLeadWebhookRetryPolicy, retryFailedWebhooks } from './webhook.js';
 import type { JsonChannelPostStore } from './channelPosts.js';
@@ -15,6 +16,18 @@ import { findLeadByReference } from './leadSla.js';
 
 const HOT_LEAD_COOLDOWN_MS = 30 * 60 * 1000;
 const lastHotLeadAtByTelegramId = new Map<number, number>();
+let adminEgressHttpClient: EgressHttpClient | undefined;
+export function setAdminEgressHttpClient(client: EgressHttpClient | undefined): void { adminEgressHttpClient = client; }
+
+async function adminTelegramFetch(url: string, init?: { signal?: AbortSignal }): Promise<{ ok: boolean; result?: number }> {
+  const client = adminEgressHttpClient;
+  if (client) {
+    const response = await client.fetch(url, { actionType: 'telegram.sendMessage', correlationId: 'admin:telegram-api' });
+    return JSON.parse(response.body) as { ok: boolean; result?: number };
+  }
+  const rawResponse = await fetch(url, init); // EGRESS-OK: fallback when no egress client configured
+  return rawResponse.json() as Promise<{ ok: boolean; result?: number }>;
+}
 
 export async function notifyAdmins(ctx: BotContext, recipientIds: number[], lead: import('./types.js').Lead): Promise<void> { if (recipientIds.length === 0) return; await Promise.allSettled(recipientIds.map((recipientId) => withTelegramCallLabel('admin:new-lead-notification', () => ctx.telegram.sendMessage(recipientId, formatMaskedLead(lead))))); }
 export interface HotLeadNotification { applicantReference?: string; telegramId?: number; phone?: string; reason: string; }
@@ -284,7 +297,7 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
   bot.command('channel_report', async (ctx) => {
     if (!(await guard(ctx, 'publication.reconcile', { kind: 'publication', channel: channelChatId }))) return;
     const [memberResponse, leads] = await Promise.all([
-      fetch(`https://api.telegram.org/bot${botToken}/getChatMemberCount?chat_id=${encodeURIComponent(channelChatId)}`).then((response) => response.json()) as Promise<{ ok: boolean; result?: number }>,
+      adminTelegramFetch(`https://api.telegram.org/bot${botToken}/getChatMemberCount?chat_id=${encodeURIComponent(channelChatId)}`),
       store.all(),
     ]);
     const postStats = await channelPosts.stats();
@@ -384,9 +397,10 @@ export function registerAdminCommands(bot: import('telegraf').Telegraf<BotContex
         sales: { store, failureStore, academyMetrics },
         alerts: operationalAlerts,
         botHealth: async () => {
+          const signal = AbortSignal.timeout(5_000);
           const [botResult, channelResult] = await Promise.allSettled([
-            fetch(`https://api.telegram.org/bot${botToken}/getMe`, { signal: AbortSignal.timeout(5_000) }).then((response) => response.json()) as Promise<{ ok: boolean }>,
-            fetch(`https://api.telegram.org/bot${botToken}/getChatMemberCount?chat_id=${encodeURIComponent(channelChatId)}`, { signal: AbortSignal.timeout(5_000) }).then((response) => response.json()) as Promise<{ ok: boolean; result?: number }>,
+            adminTelegramFetch(`https://api.telegram.org/bot${botToken}/getMe`, { signal }).then((r) => ({ ok: r.ok }) as { ok: boolean }),
+            adminTelegramFetch(`https://api.telegram.org/bot${botToken}/getChatMemberCount?chat_id=${encodeURIComponent(channelChatId)}`, { signal }),
           ]);
           const botResponse = botResult.status === 'fulfilled' ? botResult.value : undefined;
           const channelResponse = channelResult.status === 'fulfilled' ? channelResult.value : undefined;

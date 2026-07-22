@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { MiddlewareFn, Telegram } from 'telegraf';
 import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
+import type { EgressPolicy } from './egressPolicy.js';
 import type { BotContext, BotSession } from './types.js';
 
 type UpdateState = 'processing' | 'retryable' | 'completed' | 'uncertain';
@@ -81,6 +82,8 @@ const updateScope = new AsyncLocalStorage<UpdateScope>();
 const telegramCallLabelScope = new AsyncLocalStorage<string>();
 const PROCESS_INSTANCE_ID = randomUUID();
 const installedTelegrams = new WeakSet<object>();
+let egressPolicyForTelegram: EgressPolicy | undefined;
+export function setTelegramEgressPolicy(policy: EgressPolicy | undefined): void { egressPolicyForTelegram = policy; }
 const MAX_RETRY_ATTEMPTS = 10;
 const SESSION_RETENTION_MS = 30 * 24 * 60 * 60_000;
 
@@ -410,11 +413,31 @@ export async function runCurrentUpdateEffect<T>(label: string, operation: () => 
   }
 }
 
+function checkTelegramEgress(method: string, payload: unknown): void {
+  const policy = egressPolicyForTelegram;
+  if (!policy) return;
+  const destination = policy.resolveDestination('https://api.telegram.org/bot');
+  if (!destination.allowed) throw new Error(`Telegram egress denied: ${destination.reason}`);
+  const actionType = telegramMethodToActionType(method);
+  if (actionType) {
+    const rateKey = `telegram:${actionType}`;
+    if (!policy.getRateLimiter().check(rateKey)) throw new Error(`Telegram rate limit exceeded for ${actionType}`);
+  }
+}
+
+function telegramMethodToActionType(method: string): string | undefined {
+  if (method === 'sendMessage' || method === 'sendPhoto' || method === 'sendDocument') return `telegram.${method}`;
+  if (method === 'editMessageText' || method === 'editMessageCaption' || method === 'deleteMessage') return `telegram.${method}`;
+  if (method === 'setMyCommands' || method === 'setMyDescription') return `telegram.${method}`;
+  return undefined;
+}
+
 export function installIdempotentTelegramApi(telegram: Telegram): void {
   if (installedTelegrams.has(telegram as object)) return;
   installedTelegrams.add(telegram as object);
   const original = telegram.callApi.bind(telegram);
   telegram.callApi = (async (method: Parameters<Telegram['callApi']>[0], payload: Parameters<Telegram['callApi']>[1], options?: Parameters<Telegram['callApi']>[2]) => {
+    checkTelegramEgress(String(method), payload);
     const scope = updateScope.getStore();
     if (!scope) return original(method, payload, options as never);
     const logicalLabel = telegramCallLabelScope.getStore() ?? `route:${scope.routeKey}:${String(method)}`;

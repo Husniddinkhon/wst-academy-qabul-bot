@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { DEFAULT_WEBHOOK_RETRY_POLICY, type JsonWebhookFailureStore, type WebhookFailureCategory, type WebhookRetryPolicy } from './storage.js';
 import type { Lead, LeadWebhookEvent } from './types.js';
 import { IndeterminateTelegramEffectError, runCurrentUpdateEffect } from './telegramUpdates.js';
+import { EgressHttpClient, parseDestination, type EgressPolicy } from './egressPolicy.js';
 
 export interface LeadWebhookSigningConfig {
   serviceId: string;
@@ -10,6 +11,15 @@ export interface LeadWebhookSigningConfig {
 
 let signingConfig: LeadWebhookSigningConfig | undefined;
 let retryPolicy: WebhookRetryPolicy = { ...DEFAULT_WEBHOOK_RETRY_POLICY };
+let egressHttpClient: EgressHttpClient | undefined;
+
+export function setEgressHttpClient(client: EgressHttpClient): void {
+  egressHttpClient = client;
+}
+
+export function getEgressHttpClient(): EgressHttpClient | undefined {
+  return egressHttpClient;
+}
 export const LEAD_WEBHOOK_TIMEOUT_MS = 8_000;
 
 export function configureLeadWebhookSigning(config: LeadWebhookSigningConfig | undefined): void {
@@ -112,10 +122,33 @@ export async function sendLeadWebhook(webhookUrl: string | undefined, event: Lea
   const body = JSON.stringify(signingConfig ? toAcademyWebhookPayload(event, lead) : toWebhookPayload(event, lead));
   const stableKey = idempotencyKey ?? bodyIdempotencyKey(body);
   const headers = signingConfig ? createAcademyHeaders(body, signingConfig, Math.floor(Date.now() / 1000), randomBytes(24).toString('hex'), stableKey) : { 'content-type': 'application/json', 'Idempotency-Key': stableKey };
+  if (egressHttpClient) {
+    const destination = parseDestination(webhookUrl);
+    const deliverViaPolicy = async () => {
+      const response = await egressHttpClient!.fetch(webhookUrl, {
+        method: 'POST',
+        headers,
+        body,
+        actionType: 'webhook.deliver',
+        destinationType: 'webhook',
+        correlationId: stableKey,
+      });
+      if (!response.ok) throw new Error(`Lead webhook failed with status ${response.status}`);
+    };
+    try {
+      await runCurrentUpdateEffect(`webhook:${stableKey}`, deliverViaPolicy, { outcomeIsUncertain: isWebhookOutcomeUncertain });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`Lead webhook timed out after ${timeoutMs}ms.`);
+      }
+      throw error;
+    }
+    return;
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const deliver = async () => {
-    const response = await fetch(webhookUrl, { method: 'POST', headers, body, signal: controller.signal });
+    const response = await fetch(webhookUrl, { method: 'POST', headers, body, signal: controller.signal }); // EGRESS-OK
     if (!response.ok) throw new Error(`Lead webhook failed with status ${response.status}`);
   };
   try {

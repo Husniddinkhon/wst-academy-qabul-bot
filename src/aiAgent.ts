@@ -1,5 +1,6 @@
 import { courseInfo } from './course.js';
 import { AiReliabilityController, type AiProviderIdentity, type AiReliabilityControls, type AiTokenUsage } from './aiReliability.js';
+import type { EgressHttpClient } from './egressPolicy.js';
 
 export type LeadScore = 'HOT' | 'WARM' | 'COLD';
 
@@ -42,6 +43,8 @@ export const DEFAULT_AI_RELIABILITY: AiReliabilityControls = {
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_OUTPUT_TOKENS = 300;
 const sharedReliability = new AiReliabilityController();
+let egressHttpClientForAi: EgressHttpClient | undefined;
+export function setAiEgressHttpClient(client: EgressHttpClient | undefined): void { egressHttpClientForAi = client; }
 
 const HOT_PATTERNS = [
   /\b(narx|qancha|necha pul|to['‘’`]?lov|tolov|bo['‘’`]?lib|bolib|muddatli|rassrochka|boshlan|start)\b/i,
@@ -190,20 +193,46 @@ async function requestProvider(message: string, cyrillic: boolean, config: AiPro
     requestBody.thinking = { type: 'disabled' };
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
-  let response: Response;
+  const url = `${config.baseUrl.replace(/\/$/, '')}/chat/completions`;
+  const client = egressHttpClientForAi;
 
+  let responseBody: string;
+  let responseStatus: number;
   try {
-    response = await fetch(`${config.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+    if (client) {
+      const safeResponse = await client.fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+        actionType: 'ai.completion',
+        destinationType: 'ai_provider',
+        payloadClassification: 'internal_non_sensitive',
+        correlationId: `ai:${providerIdentity(config).provider}:${providerIdentity(config).model}`,
+      });
+      responseBody = safeResponse.body;
+      responseStatus = safeResponse.status;
+    } else {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+      try {
+        const rawResponse = await fetch(url, { // EGRESS-OK: fallback when no egress client configured
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+        responseBody = await rawResponse.text();
+        responseStatus = rawResponse.status;
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       reliability.finishProvider(identity, attempt, 'timeout', controls);
@@ -211,18 +240,16 @@ async function requestProvider(message: string, cyrillic: boolean, config: AiPro
     }
     reliability.finishProvider(identity, attempt, 'network_error', controls);
     throw error;
-  } finally {
-    clearTimeout(timeout);
   }
 
-  if (!response.ok) {
+  if (responseStatus < 200 || responseStatus >= 300) {
     reliability.finishProvider(identity, attempt, 'http_error', controls);
-    throw new Error(`AI provider returned ${response.status}`);
+    throw new Error(`AI provider returned ${responseStatus}`);
   }
 
   let data: { choices?: Array<{ message?: { content?: string | null } }>; usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } };
   try {
-    data = (await response.json()) as typeof data;
+    data = JSON.parse(responseBody) as typeof data;
   } catch {
     reliability.finishProvider(identity, attempt, 'empty_response', controls);
     throw new Error('AI provider returned an invalid response.');
