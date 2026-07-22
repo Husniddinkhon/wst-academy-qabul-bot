@@ -155,3 +155,7 @@ vite.config.ts.timestamp-*
 /.staging-data/
 /.staging-media/
 /.staging-backups/
+
+# Migration engine runtime artifacts
+/data/migrations/*
+!/data/migrations/.gitkeep

@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "backfill:lead-events": "tsx src/backfillEventsCli.ts",
+    "migrate": "tsx src/migrationCli.ts",
     "test": "tsx --test tests/*.test.ts",
     "content:render": "node scripts/render-channel-assets.mjs",
     "content:verify": "node scripts/verify-channel-assets.mjs",

@@ -210,6 +210,7 @@ test('legacy loading migrates in memory and rollback snapshot remains readable',
     const at = NOW.toISOString();
     const legacy = { applicants: [{ applicantId: 'legacy-1', telegramUserId: 1001, telegramChatId: 1001, identityStatus: 'ACTIVE', verificationStatus: 'TELEGRAM_VERIFIED', lifecycleState: 'CONSENT_REQUIRED', consents: {}, createdAt: at, updatedAt: at, auditReferences: [] }], audit: [], effectKeys: [] };
     await writeFile(f.file, JSON.stringify(legacy), 'utf8');
+    await f.store.migrateStore(false);
     assert.equal((await f.store.all())[0].applicantId, 'legacy-1');
     await f.store.identify({ telegramUserId: 1001, telegramChatId: 1001, username: 'legacy_user', chatType: 'private' }, 'migrate-write', NOW);
     const saved = JSON.parse(await readFile(f.file, 'utf8'));

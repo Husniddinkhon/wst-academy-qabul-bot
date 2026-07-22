@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
 import { maskPhone, normalizeApplicantText, normalizeUzbekPhone } from './applicantValidation.js';
 import type { Lead } from './types.js';
+import { backupStoreFile, restoreStoreFile, MigrationRequiredError } from './migrationEngine.js';
 
 export const APPLICANT_IDENTITY_SCHEMA_VERSION = 1;
 export const APPLICATION_CONSENT_VERSION = '2026-07-22.application.v1';
@@ -86,8 +87,60 @@ export function deriveAuthoritativeTelegramIdentity(context: { from?: { id?: unk
   return { telegramUserId: userId as number, telegramChatId: chatId as number, username: typeof context.from?.username === 'string' ? context.from.username : undefined, chatType: typeof context.chat?.type === 'string' ? context.chat.type : undefined };
 }
 
+const APPLICANT_IDENTITY_MIGRATION_DIR = 'data/migrations/applicant-identity';
+
 export class JsonApplicantIdentityStore {
   constructor(private readonly filePath: string) {}
+
+  async detectVersion(): Promise<number | null> {
+    try {
+      const raw = await readJson<Record<string, unknown>>(this.filePath, {});
+      if (typeof raw?.schemaVersion === 'number') return raw.schemaVersion;
+      if (raw && typeof raw === 'object' && 'applicants' in raw && Array.isArray(raw.applicants) && raw.applicants.length > 0) return 0;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async migrateStore(dryRun: boolean): Promise<{ backupHash: string; backupPath: string } | null> {
+    const detected = await this.detectVersion();
+    if (detected !== null && detected >= APPLICANT_IDENTITY_SCHEMA_VERSION) return null;
+    if (detected === null) return null;
+    const raw = await readJson<LegacyApplicantIdentityDatabase>(this.filePath, { applicants: [] });
+    const backup = await backupStoreFile(this.filePath, APPLICANT_IDENTITY_MIGRATION_DIR, 'applicant-identity');
+    if (!dryRun) {
+      const migrated = migrateApplicantIdentityDatabase(raw);
+      await atomicWriteJson(this.filePath, migrated);
+    }
+    return { backupHash: backup.contentHash, backupPath: backup.backupPath };
+  }
+
+  async rollbackStore(backupPath: string): Promise<void> {
+    await restoreStoreFile(backupPath, this.filePath);
+  }
+
+  async verifyStore(): Promise<{ ok: boolean; errors: string[] }> {
+    const errors: string[] = [];
+    const detected = await this.detectVersion();
+    if (detected === null) {
+      errors.push('No applicant identity data found.');
+      return { ok: true, errors };
+    }
+    if (detected !== APPLICANT_IDENTITY_SCHEMA_VERSION) {
+      errors.push(`Expected version ${APPLICANT_IDENTITY_SCHEMA_VERSION}, found ${detected}.`);
+      return { ok: false, errors };
+    }
+    try {
+      const raw = await readJson<ApplicantIdentityDatabase>(this.filePath, { schemaVersion: 1, applicants: [], audit: [], effectKeys: [] });
+      if (!Array.isArray(raw.applicants)) errors.push('applicants is not an array.');
+      if (!Array.isArray(raw.audit)) errors.push('audit is not an array.');
+      if (!Array.isArray(raw.effectKeys)) errors.push('effectKeys is not an array.');
+    } catch (error) {
+      errors.push(`Read failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { ok: errors.length === 0, errors };
+  }
 
   async identify(input: TelegramIdentityInput, correlationId: string, now = new Date(), idempotencyKey?: string): Promise<IdentityResult> {
     if (!validTelegramActor(input)) return { ok: false, reason: 'invalid_actor' };
@@ -278,7 +331,23 @@ export class JsonApplicantIdentityStore {
     });
   }
 
-  private async read(): Promise<ApplicantIdentityDatabase> { return migrateApplicantIdentityDatabase(await readJson<LegacyApplicantIdentityDatabase>(this.filePath, { applicants: [] })); }
+  private async read(): Promise<ApplicantIdentityDatabase> {
+    const raw = await readJson<LegacyApplicantIdentityDatabase>(this.filePath, { applicants: [] });
+    if (raw.schemaVersion === undefined || raw.schemaVersion === null) {
+      if (Array.isArray(raw.applicants) && raw.applicants.length > 0) {
+        throw new MigrationRequiredError('Applicant identity data needs migration. Run: node dist/migrationCli.js migrate');
+      }
+      return { schemaVersion: APPLICANT_IDENTITY_SCHEMA_VERSION, applicants: [], audit: [], effectKeys: [] };
+    }
+    if (raw.schemaVersion < APPLICANT_IDENTITY_SCHEMA_VERSION) {
+      throw new MigrationRequiredError(`Applicant identity schema version ${raw.schemaVersion} < ${APPLICANT_IDENTITY_SCHEMA_VERSION}. Run: node dist/migrationCli.js migrate`);
+    }
+    if (raw.schemaVersion > APPLICANT_IDENTITY_SCHEMA_VERSION) {
+      throw new Error(`Unsupported applicant identity schema version ${raw.schemaVersion}. Upgrade this software.`);
+    }
+    return raw as ApplicantIdentityDatabase;
+  }
+
   private async write(db: ApplicantIdentityDatabase): Promise<void> { await atomicWriteJson(this.filePath, db); }
 }
 

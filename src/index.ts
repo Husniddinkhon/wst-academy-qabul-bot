@@ -12,7 +12,7 @@ import { configureLeadWebhookRetryPolicy, configureLeadWebhookSigning, deliverLe
 import type { BotContext, BotSession, Lead, LeadSource } from './types.js';
 import { startFollowUpAutomation } from './followups.js';
 import { startDailyReport } from './dailyReport.js';
-import { PostgresFollowUpStore, PostgresLeadStore, PostgresStorage } from './postgres.js';
+import { PostgresFollowUpStore, PostgresLeadStore, PostgresStorage, SCHEMA_VERSION as POSTGRES_SCHEMA_VERSION } from './postgres.js';
 import { JsonChannelPostStore } from './channelPosts.js';
 import { PublisherRuntime } from './channelPublisher.js';
 import { BACK_BUTTON, CALCULATOR_BUTTON, LESSON_BUTTON, MENU_BUTTON, NEXT_BUTTON, QUIZ, QUIZ_BUTTON, lessonKeyboard, lessonText, quizKeyboard, quizText, startCalculator, startLesson, startQuiz, storageTerabytes, validateCalculatorValue } from './learning.js';
@@ -27,9 +27,10 @@ import { JsonOperationalAlertStore } from './operationalAlerts.js';
 import { leadReference, startLeadSlaEscalation } from './leadSla.js';
 import { startQabulOpsAggregateServer } from './opsAggregateServer.js';
 import { createTelegramUpdateMiddleware, currentUpdateIdempotencyKey, installIdempotentTelegramApi, JsonTelegramSessionStore, runCurrentUpdateEffect, startTelegramUpdateRecovery, TelegramUpdateJournal, telegramUpdateTimestamp, setTelegramEgressPolicy } from './telegramUpdates.js';
-import { CONSENT_NOTICES, deriveAuthoritativeTelegramIdentity, JsonApplicantIdentityStore, withdrawnLeadAnonymizationPatch } from './applicantIdentity.js';
+import { CONSENT_NOTICES, APPLICANT_IDENTITY_SCHEMA_VERSION, deriveAuthoritativeTelegramIdentity, JsonApplicantIdentityStore, withdrawnLeadAnonymizationPatch } from './applicantIdentity.js';
 import { maskPhone, validateApplicantMessage } from './applicantValidation.js';
-import { authorizationCallbackSecret, deriveAuthorizationActor, JsonAuthorizationStore } from './authorization.js';
+import { AUTHORIZATION_SCHEMA_VERSION, authorizationCallbackSecret, deriveAuthorizationActor, JsonAuthorizationStore } from './authorization.js';
+import { MigrationEngine } from './migrationEngine.js';
 
 const callApplicationConsentKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('Roziman', 'call_consent_application_accept'), Markup.button.callback('Rad etaman', 'call_consent_application_decline')],
@@ -279,7 +280,6 @@ async function bootstrap(): Promise<void> {
     maxManualReplays: config.webhookMaxManualReplays,
   });
   const postgres = config.databaseUrl ? new PostgresStorage(config.databaseUrl) : undefined;
-  if (postgres) await postgres.migrate(config.leadsFile, config.followupsFile);
   const store = postgres ? new PostgresLeadStore(postgres) : new JsonLeadStore(config.leadsFile);
   const identities = new JsonApplicantIdentityStore(config.applicantIdentitiesFile);
   const failureStore = new JsonWebhookFailureStore(config.webhookFailedFile);
@@ -288,6 +288,41 @@ async function bootstrap(): Promise<void> {
   const publisherRuntime = new PublisherRuntime();
   const operationalAlerts = new JsonOperationalAlertStore(config.opsAlertsFile);
   const authorization = new JsonAuthorizationStore(config.authorizationFile, authorizationCallbackSecret(config.botToken));
+
+  const migrationEngine = new MigrationEngine('data/migrations');
+  if (postgres) {
+    migrationEngine.register({
+      name: 'postgres', filePath: config.databaseUrl!, currentVersion: POSTGRES_SCHEMA_VERSION,
+      detectVersion: async () => postgres.detectVersion(),
+      migrate: async (dryRun) => postgres.migrateStore(dryRun),
+      rollback: async (backupPath) => postgres.rollbackStore(backupPath),
+      verify: async () => postgres.verifyStore(),
+    });
+  }
+  migrationEngine.register({
+    name: 'applicant-identity', filePath: config.applicantIdentitiesFile, currentVersion: APPLICANT_IDENTITY_SCHEMA_VERSION,
+    detectVersion: async () => identities.detectVersion(),
+    migrate: async (dryRun) => identities.migrateStore(dryRun),
+    rollback: async (backupPath) => identities.rollbackStore(backupPath),
+    verify: async () => identities.verifyStore(),
+  });
+  migrationEngine.register({
+    name: 'authorization', filePath: config.authorizationFile, currentVersion: AUTHORIZATION_SCHEMA_VERSION,
+    detectVersion: async () => authorization.detectVersion(),
+    migrate: async (dryRun) => authorization.migrateStore(dryRun),
+    rollback: async (backupPath) => authorization.rollbackStore(backupPath),
+    verify: async () => authorization.verifyStore(),
+  });
+
+  const startupCompat = await migrationEngine.verifyStartupCompatibility();
+  if (!startupCompat.ok) {
+    for (const line of startupCompat.guidance) console.error(line);
+    console.error('\nStartup ABORTED. Run the migration CLI to resolve:');
+    console.error('  node dist/migrationCli.js status');
+    console.error('  node dist/migrationCli.js migrate --apply');
+    process.exit(1);
+  }
+
   await authorization.bootstrapOwners(config.adminIds);
   const opsAggregateServer = config.opsAggregatePort && config.opsAggregateServiceId && config.opsAggregateSecret
     ? startQabulOpsAggregateServer({ port: config.opsAggregatePort, serviceId: config.opsAggregateServiceId, secret: config.opsAggregateSecret, leads: store, alerts: operationalAlerts, followUps: followUpStore, webhookFailures: failureStore })

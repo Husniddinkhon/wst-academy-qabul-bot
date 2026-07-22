@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
+import { backupStoreFile, restoreStoreFile, MigrationRequiredError } from './migrationEngine.js';
 
 export const AUTHORIZATION_SCHEMA_VERSION = 1;
 
@@ -146,9 +147,61 @@ export type ApprovalResult =
   | { ok: false; reason: ApprovalFailureReason };
 type ApprovalFailureReason = 'unauthenticated' | 'inactive' | 'permission_missing' | 'scope_missing' | 'not_found' | 'self_approval' | 'wrong_state' | 'expired' | 'payload_mismatch' | 'version_mismatch' | 'reused' | 'revoked';
 
+const AUTHORIZATION_MIGRATION_DIR = 'data/migrations/authorization';
+
 export class JsonAuthorizationStore {
   constructor(private readonly filePath: string, private readonly callbackSecret: string) {
     if (callbackSecret.length < 32) throw new Error('Authorization callback secret must contain at least 32 characters.');
+  }
+
+  async detectVersion(): Promise<number | null> {
+    try {
+      const raw = await readJson<Record<string, unknown>>(this.filePath, {});
+      if (typeof raw?.schemaVersion === 'number') return raw.schemaVersion;
+      if (raw && typeof raw === 'object' && 'actors' in raw && Array.isArray(raw.actors) && raw.actors.length > 0) return 0;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  async migrateStore(dryRun: boolean): Promise<{ backupHash: string; backupPath: string } | null> {
+    const detected = await this.detectVersion();
+    if (detected !== null && detected >= AUTHORIZATION_SCHEMA_VERSION) return null;
+    if (detected === null) return null;
+    const raw = await readJson<LegacyAuthorizationDatabase>(this.filePath, {});
+    const backup = await backupStoreFile(this.filePath, AUTHORIZATION_MIGRATION_DIR, 'authorization');
+    if (!dryRun) {
+      const migrated = migrateAuthorizationDatabase(raw);
+      await atomicWriteJson(this.filePath, migrated);
+    }
+    return { backupHash: backup.contentHash, backupPath: backup.backupPath };
+  }
+
+  async rollbackStore(backupPath: string): Promise<void> {
+    await restoreStoreFile(backupPath, this.filePath);
+  }
+
+  async verifyStore(): Promise<{ ok: boolean; errors: string[] }> {
+    const errors: string[] = [];
+    const detected = await this.detectVersion();
+    if (detected === null) {
+      errors.push('No authorization data found.');
+      return { ok: true, errors };
+    }
+    if (detected !== AUTHORIZATION_SCHEMA_VERSION) {
+      errors.push(`Expected version ${AUTHORIZATION_SCHEMA_VERSION}, found ${detected}.`);
+      return { ok: false, errors };
+    }
+    try {
+      const raw = await readJson<AuthorizationDatabase>(this.filePath, {} as AuthorizationDatabase);
+      if (!raw.actors || !Array.isArray(raw.actors)) errors.push('actors is not an array.');
+      if (!raw.assignments || !Array.isArray(raw.assignments)) errors.push('assignments is not an array.');
+      if (!raw.approvals || !Array.isArray(raw.approvals)) errors.push('approvals is not an array.');
+    } catch (error) {
+      errors.push(`Read failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { ok: errors.length === 0, errors };
   }
 
   async bootstrapOwners(telegramUserIds: number[], now = new Date()): Promise<{ created: number }> {
@@ -413,7 +466,23 @@ export class JsonAuthorizationStore {
     await withFileLock(this.filePath, async () => { const db = await this.read(); if (appendApprovalDenial(db, input, 'callback.consume', reason, correlationId, now)) await this.write(db); });
   }
 
-  private async read(): Promise<AuthorizationDatabase> { return migrateAuthorizationDatabase(await readJson<LegacyAuthorizationDatabase>(this.filePath, {})); }
+  private async read(): Promise<AuthorizationDatabase> {
+    const raw = await readJson<LegacyAuthorizationDatabase>(this.filePath, {});
+    if (raw.schemaVersion === undefined || raw.schemaVersion === null) {
+      if (raw.actors && raw.actors.length > 0) {
+        throw new MigrationRequiredError('Authorization data needs migration. Run: node dist/migrationCli.js migrate');
+      }
+      return { schemaVersion: AUTHORIZATION_SCHEMA_VERSION, actors: [], assignments: [], approvals: [], callbacks: [], audit: [], denialBuckets: [] };
+    }
+    if (raw.schemaVersion < AUTHORIZATION_SCHEMA_VERSION) {
+      throw new MigrationRequiredError(`Authorization schema version ${raw.schemaVersion} < ${AUTHORIZATION_SCHEMA_VERSION}. Run: node dist/migrationCli.js migrate`);
+    }
+    if (raw.schemaVersion > AUTHORIZATION_SCHEMA_VERSION) {
+      throw new Error(`Unsupported authorization schema version ${raw.schemaVersion}. Upgrade this software.`);
+    }
+    return raw as AuthorizationDatabase;
+  }
+
   private async write(db: AuthorizationDatabase): Promise<void> { await atomicWriteJson(this.filePath, db); }
 }
 

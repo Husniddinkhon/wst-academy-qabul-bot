@@ -1,13 +1,85 @@
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { Pool, type PoolClient } from 'pg';
 import { claimFollowUpState, finishFollowUpState, JsonFollowUpStore, JsonLeadStore, mergeLeadRecords, normalizeFollowUpState, type FollowUpClaimOptions, type FollowUpClaimResult, type FollowUpDeliveryClaim, type FollowUpDeliveryOutcome, type FollowUpDeliveryRequest, type FunnelEventMetrics, type LeadUpsertResult } from './storage.js';
 import type { FollowUpState, Lead, LeadStatus } from './types.js';
 
 export const SCHEMA_VERSION = 2;
 
+export const POSTGRES_MIGRATION_DIR = 'data/migrations/postgres';
+
 export class PostgresStorage {
   readonly pool: Pool;
   constructor(databaseUrl: string) { this.pool = new Pool({ connectionString: databaseUrl, max: 10 }); }
+
+  async detectVersion(): Promise<number | null> {
+    try {
+      const result = await this.pool.query('SELECT max(version) as version FROM schema_migrations');
+      return result.rows[0]?.version ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async migrateStore(dryRun: boolean, leadsFile?: string, followupsFile?: string): Promise<{ backupHash: string; backupPath: string } | null> {
+    const detected = await this.detectVersion();
+    if (detected !== null && detected >= SCHEMA_VERSION) return null;
+    const backupDir = POSTGRES_MIGRATION_DIR;
+    await mkdir(backupDir, { recursive: true });
+    await chmod(backupDir, 0o700);
+    const stamp = Date.now();
+    const backupPath = path.join(backupDir, `postgres-schema-${stamp}.sql`);
+    if (!dryRun) {
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock(937421)');
+        await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
+        await client.query(`CREATE TABLE IF NOT EXISTS leads (telegram_id bigint PRIMARY KEY, payload jsonb NOT NULL, status text NOT NULL, source text NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS leads_status_idx ON leads(status); CREATE INDEX IF NOT EXISTS leads_source_idx ON leads(source); CREATE INDEX IF NOT EXISTS leads_created_at_idx ON leads(created_at DESC)`);
+        await client.query(`CREATE TABLE IF NOT EXISTS followups (telegram_id bigint PRIMARY KEY, payload jsonb NOT NULL, count integer NOT NULL CHECK (count >= 0), last_sent_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now())`);
+        await client.query(`CREATE INDEX IF NOT EXISTS followups_due_idx ON followups(last_sent_at, count)`);
+        await client.query(`CREATE TABLE IF NOT EXISTS conversation_events (id bigserial PRIMARY KEY, telegram_id bigint NOT NULL, event_type text NOT NULL, payload jsonb NOT NULL DEFAULT '{}'::jsonb, idempotency_key text UNIQUE, created_at timestamptz NOT NULL DEFAULT now())`);
+        await client.query(`CREATE INDEX IF NOT EXISTS conversation_events_lead_idx ON conversation_events(telegram_id, created_at DESC)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS conversation_events_created_at_idx ON conversation_events(created_at DESC)`);
+        if (leadsFile && followupsFile) await importJson(client, leadsFile, followupsFile);
+        await client.query('INSERT INTO schema_migrations(version) VALUES ($1) ON CONFLICT DO NOTHING', [SCHEMA_VERSION]);
+        await client.query('COMMIT');
+      } catch (error) { await client.query('ROLLBACK'); throw error; }
+      finally { client.release(); }
+    }
+    await writeFile(backupPath, `-- Postgres schema migration backup\n-- Version: ${detected} -> ${SCHEMA_VERSION}\n-- Timestamp: ${new Date().toISOString()}\n`, 'utf8');
+    await chmod(backupPath, 0o600);
+    return { backupHash: `schema-v${SCHEMA_VERSION}`, backupPath };
+  }
+
+  async rollbackStore(backupPath: string): Promise<void> {
+    console.warn(`Postgres rollback from ${backupPath} is a no-op. Manual database restore required.`);
+  }
+
+  async verifyStore(): Promise<{ ok: boolean; errors: string[] }> {
+    const errors: string[] = [];
+    try {
+      const version = await this.detectVersion();
+      if (version === null) {
+        errors.push('No schema_migrations table found. Migration not applied.');
+        return { ok: false, errors };
+      }
+      if (version !== SCHEMA_VERSION) {
+        errors.push(`Schema version ${version} != expected ${SCHEMA_VERSION}.`);
+        return { ok: false, errors };
+      }
+      const tables = ['leads', 'followups', 'conversation_events'];
+      for (const table of tables) {
+        const result = await this.pool.query(`SELECT to_regclass('${table}')`);
+        if (!result.rows[0]?.to_regclass) errors.push(`Table '${table}' does not exist.`);
+      }
+    } catch (error) {
+      errors.push(`Verification failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { ok: errors.length === 0, errors };
+  }
 
   async migrate(leadsFile: string, followupsFile: string): Promise<void> {
     const client = await this.pool.connect();
