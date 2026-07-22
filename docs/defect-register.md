@@ -34,13 +34,18 @@ Severity uses P0 Critical, P1 High, P2 Medium, and P3 Low. Closed entries requir
 
 Wave 5.1 controlled staging QA found that the approved CSV allowlist still included raw contact details and private application answers. The staging-only repair reduced the immutable allowlist to opaque references, timestamps, lifecycle statuses, source/campaign references and payment status; focused export tests now reject raw names, phone numbers and application answers. Production remains unchanged and the repair is not deployed.
 
+## Resolved in the local repair branch
+
+| ID | Severity | Defect | Resolution evidence | Status |
+|---|---|---|---|---|
+| P1-11 | P1 | Deployment rollback backed up the newly built candidate rather than the previous release | `scripts/deploy-guard.sh`: backup moved before `npm ci`+`npm run build`; rollback guards against missing backup; `tests/deploymentConfig.test.ts` | Resolved locally; not deployed |
+| P1-09 | P1 | Generic webhook and AI endpoints allow unsafe egress configuration | Outbound egress policy commit `5afd576` | Resolved locally; not deployed |
+| P1-10 | P1 | Database DDL/import runs during application startup | Migration engine commit `a41e448` | Resolved locally; not deployed |
+
 ## Preserved P1 backlog for later controlled waves
 
 | ID | Defect | Required future control | Current disposition |
 |---|---|---|---|
-| P1-09 | Generic webhook and AI endpoints allow unsafe egress configuration | HTTPS-only host allowlists, credential/private-network rejection, signed versioned connectors | Preserved; outbound egress controls excluded from Wave 3 |
-| P1-10 | Database DDL/import runs during application startup | Separate owner-controlled migration command and rollback gate | Preserved; database migration redesign excluded from Wave 3 |
-| P1-11 | Deployment rollback backs up the newly built candidate rather than the previous release | Immutable release directories or verified pre-build snapshot and atomic switch | Preserved; deployment changes deferred |
 | P1-12 | Backup/restore, off-host retention and RPO/RTO are not proven by a restore rehearsal | Checksummed manifests, encrypted off-host copy and isolated restore exercise | Preserved; production backup mutation prohibited |
 
 ## Wave 3.1B staging precheck resolved locally
@@ -58,4 +63,4 @@ Wave 5.1 controlled staging QA found that the approved CSV allowlist still inclu
 
 ## Release qualification
 
-Wave 5 completion qualifies only the local RBAC, scope, maker-checker, callback, masking, revocation, and authorization-audit controls for controlled staging QA. It does not make the bot production-ready or authorize deployment. P1-09 through P1-12 remain release blockers until their own controlled repair and verification gates pass.
+Wave 5 completion qualifies only the local RBAC, scope, maker-checker, callback, masking, revocation, and authorization-audit controls for controlled staging QA. It does not make the bot production-ready or authorize deployment. P1-12 remains a release blocker until its own controlled repair and verification gates pass.
