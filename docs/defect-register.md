@@ -32,6 +32,8 @@ Severity uses P0 Critical, P1 High, P2 Medium, and P3 Low. Closed entries requir
 |---|---|---|---|---|
 | P1-07 | P1 | Flat `ADMIN_IDS` granted PII, admissions, approval, publishing, retry and export privileges | Durable default-deny roles/scopes, private authoritative actor, masked default views, bound maker-checker, signed callbacks, immediate revocation and privacy-safe allow/deny audit; `tests/authorization.test.ts`, `tests/channelAdminAuth.test.ts` | Resolved locally; not deployed |
 
+Wave 5.1 controlled staging QA found that the approved CSV allowlist still included raw contact details and private application answers. The staging-only repair reduced the immutable allowlist to opaque references, timestamps, lifecycle statuses, source/campaign references and payment status; focused export tests now reject raw names, phone numbers and application answers. Production remains unchanged and the repair is not deployed.
+
 ## Preserved P1 backlog for later controlled waves
 
 | ID | Defect | Required future control | Current disposition |

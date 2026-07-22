@@ -4,8 +4,7 @@ import { atomicWriteJson, readJson, withFileLock } from './safeJson.js';
 import type { FollowUpState, Lead, LeadStatus, LeadWebhookEvent } from './types.js';
 
 export const APPROVED_APPLICANT_EXPORT_FIELDS: readonly (keyof Lead)[] = [
-  'applicantId', 'id', 'createdAt', 'updatedAt', 'fullName', 'phone', 'age', 'city', 'goal', 'preferredTime',
-  'status', 'studentStatus', 'source', 'campaignId', 'paymentStatus',
+  'applicantId', 'id', 'createdAt', 'updatedAt', 'status', 'studentStatus', 'source', 'campaignId', 'paymentStatus',
 ];
 
 interface StoredLeadEffect { kind: 'upsert' | 'update'; result: LeadUpsertResult | Lead | undefined }

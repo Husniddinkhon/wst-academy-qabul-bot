@@ -53,14 +53,14 @@ test('specific new attribution replaces an older attribution', () => {
   assert.equal(merged.phone, '+998971112233');
 });
 
-test('approved applicant export omits Telegram identity and private free-text fields', async () => {
+test('approved applicant export omits Telegram identity, raw contact details and private application answers', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'approved-export-'));
   try {
     const store = new JsonLeadStore(path.join(directory, 'leads.json'));
     await store.add({ ...existing, applicantId: 'applicant-1', username: 'private_user', telegramId: 991234567, lastMessage: 'private applicant answer', operatorNote: 'private operator note', notes: 'private registration note' });
     const csv = await store.toApprovedApplicantCsv();
     assert.match(csv, /^applicantId,id,createdAt,/);
-    assert.doesNotMatch(csv, /telegramId|username|lastMessage|operatorNote|notes|private_user|private applicant answer|private operator note|private registration note|991234567/);
+    assert.doesNotMatch(csv, /telegramId|username|fullName|phone|age|city|workStatus|experience|goal|paymentOption|preferredTime|lastMessage|operatorNote|notes|private_user|private applicant answer|private operator note|private registration note|991234567|Student|\+998901234567|CCTV course/);
     assert.match(csv, /applicant-1/);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

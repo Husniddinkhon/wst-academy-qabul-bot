@@ -57,6 +57,8 @@ test('unauthenticated, inactive, permission-missing and scope-missing actors fai
     assert.equal((await f.store.authorize(actor(undefined), 'applicant.view.masked', { kind: 'applicant', id: 'app-1' }, 'anonymous', NOW)).reason, 'unauthenticated');
     assert.equal((await f.store.authorize(actor(999_000_001), 'applicant.view.masked', { kind: 'applicant', id: 'app-1' }, 'unknown', NOW)).reason, 'inactive');
     const assignment = await assignRole(f.store, 920_000_001, 'ADMISSIONS_OPERATOR', [{ kind: 'applicant', mode: 'assigned', resourceIds: ['app-1'] }]);
+    const restartedAssigned = new JsonAuthorizationStore(f.file, authorizationCallbackSecret('synthetic-test-bot-token-with-safe-length'));
+    assert.equal((await restartedAssigned.authorize(actor(920_000_001), 'applicant.view.masked', { kind: 'applicant', id: 'app-1' }, 'assigned-after-restart', NOW)).ok, true);
     assert.equal((await f.store.authorize(actor(920_000_001), 'applicant.export', { kind: 'applicant', id: 'app-1' }, 'missing-permission', NOW)).reason, 'permission_missing');
     assert.equal((await f.store.authorize(actor(920_000_001), 'applicant.update', { kind: 'applicant', id: 'app-2' }, 'missing-scope', NOW)).reason, 'scope_missing');
     const revokePayload = roleRevocationPayload(assignment.assignmentId, 'Synthetic role revocation.');
@@ -65,7 +67,8 @@ test('unauthenticated, inactive, permission-missing and scope-missing actors fai
     if (!revokeRequest.ok) return;
     await f.store.approveRequest(revokeRequest.approval.approvalId, actor(OWNER_2), revokePayload, 'v1', 'revoke-approve', NOW);
     assert.equal((await f.store.revokeRole(revokeRequest.approval.approvalId, actor(OWNER_1), assignment.assignmentId, 'Synthetic role revocation.', 'v1', 'revoke-execute', NOW)).ok, true);
-    assert.equal((await f.store.authorize(actor(920_000_001), 'applicant.view.masked', { kind: 'applicant', id: 'app-1' }, 'revoked-next-command', NOW)).reason, 'inactive');
+    const restartedRevoked = new JsonAuthorizationStore(f.file, authorizationCallbackSecret('synthetic-test-bot-token-with-safe-length'));
+    assert.equal((await restartedRevoked.authorize(actor(920_000_001), 'applicant.view.masked', { kind: 'applicant', id: 'app-1' }, 'revoked-next-command', NOW)).reason, 'inactive');
   } finally { await f.cleanup(); }
 });
 
@@ -76,6 +79,9 @@ test('masked access is distinct from sensitive view and operators cannot export'
     assert.equal((await f.store.authorize(actor(920_000_002), 'applicant.view.masked', { kind: 'applicant', id: 'app-1' }, 'masked', NOW)).ok, true);
     assert.equal((await f.store.authorize(actor(920_000_002), 'applicant.view.sensitive', { kind: 'applicant', id: 'app-1' }, 'sensitive', NOW)).reason, 'permission_missing');
     assert.equal((await f.store.authorize(actor(920_000_002), 'applicant.export', { kind: 'applicant', id: 'app-1' }, 'export', NOW)).reason, 'permission_missing');
+    await assignRole(f.store, 920_000_005, 'ADMISSIONS_MANAGER', [{ kind: 'applicant', mode: 'assigned', resourceIds: ['app-1'] }]);
+    assert.equal((await f.store.authorize(actor(920_000_005), 'applicant.view.sensitive', { kind: 'applicant', id: 'app-1' }, 'sensitive-scoped', NOW, 'Synthetic review purpose.')).ok, true);
+    assert.equal((await f.store.authorize(actor(920_000_005), 'applicant.view.sensitive', { kind: 'applicant', id: 'app-2' }, 'sensitive-out-of-scope', NOW, 'Synthetic review purpose.')).reason, 'scope_missing');
   } finally { await f.cleanup(); }
 });
 
@@ -84,6 +90,7 @@ test('program, region, channel, campaign and audit-only scopes are enforced', as
   try {
     await assignRole(f.store, 920_000_010, 'ADMISSIONS_OPERATOR', [{ kind: 'applicant', mode: 'selected', programs: ['cctv'], regions: ['tashkent'] }]);
     assert.equal((await f.store.authorize(actor(920_000_010), 'applicant.update', { kind: 'applicant', id: 'app-1', program: 'cctv', region: 'tashkent' }, 'matching-program-region', NOW)).ok, true);
+    assert.equal((await f.store.authorize(actor(920_000_010), 'applicant.update', { kind: 'applicant', id: 'app-1', program: 'access-control', region: 'tashkent' }, 'wrong-program', NOW)).reason, 'scope_missing');
     assert.equal((await f.store.authorize(actor(920_000_010), 'applicant.update', { kind: 'applicant', id: 'app-1', program: 'cctv', region: 'samarkand' }, 'wrong-region', NOW)).reason, 'scope_missing');
 
     await assignRole(f.store, 920_000_011, 'PUBLISHER', [{ kind: 'publication', mode: 'selected', channels: ['staging-channel'] }]);
@@ -121,7 +128,8 @@ test('approval binds payload, version, expiry, revocation and one-time consumpti
     assert.equal((await f.store.approveRequest(first.approval.approvalId, actor(OWNER_2), first.payload, 'v2', 'version-change', NOW)).reason, 'version_mismatch');
     assert.equal((await f.store.approveRequest(first.approval.approvalId, actor(OWNER_2), first.payload, 'v1', 'approved', NOW)).ok, true);
     assert.equal((await f.store.consumeApproval(first.approval.approvalId, actor(OWNER_1), 'publication.publish', first.resource, first.payload, 'v1', 'consume', NOW)).ok, true);
-    assert.equal((await f.store.consumeApproval(first.approval.approvalId, actor(OWNER_1), 'publication.publish', first.resource, first.payload, 'v1', 'reuse', NOW)).reason, 'reused');
+    const restartedConsumed = new JsonAuthorizationStore(f.file, authorizationCallbackSecret('synthetic-test-bot-token-with-safe-length'));
+    assert.equal((await restartedConsumed.consumeApproval(first.approval.approvalId, actor(OWNER_1), 'publication.publish', first.resource, first.payload, 'v1', 'reuse-after-restart', NOW)).reason, 'reused');
 
     const expiredPayload = { post: 'expires' };
     const expired = await f.store.requestApproval(actor(OWNER_1), 'publication.publish', first.resource, expiredPayload, 'v1', new Date(NOW.getTime() + 1_000), 'expires', NOW);
@@ -182,7 +190,8 @@ test('signed callbacks reject forged actor, expiry and replay while reauthorizin
     assert.equal((await f.store.consumeSignedCallback(forgedPayload, actor(OWNER_1), 'forged', NOW)).reason, 'forged');
     assert.equal((await f.store.consumeSignedCallback(created.payload, actor(OWNER_2), 'wrong-actor', NOW)).reason, 'actor_mismatch');
     assert.equal((await f.store.consumeSignedCallback(created.payload, actor(OWNER_1), 'consume', NOW)).ok, true);
-    assert.equal((await f.store.consumeSignedCallback(created.payload, actor(OWNER_1), 'replay', NOW)).reason, 'replayed');
+    const restarted = new JsonAuthorizationStore(f.file, authorizationCallbackSecret('synthetic-test-bot-token-with-safe-length'));
+    assert.equal((await restarted.consumeSignedCallback(created.payload, actor(OWNER_1), 'replay-after-restart', NOW)).reason, 'replayed');
     const expiring = await f.store.createSignedCallback(actor(OWNER_1), 'publication.publish', 'publish', { kind: 'publication', id: 'post-2' }, new Date(NOW.getTime() + 1_000), 'callback-expiring', NOW);
     assert.equal(expiring.ok, true);
     if (expiring.ok) assert.equal((await f.store.consumeSignedCallback(expiring.payload, actor(OWNER_1), 'expired', new Date(NOW.getTime() + 1_001))).reason, 'expired');
@@ -198,6 +207,11 @@ test('concurrent approval and role updates serialize without duplicate authority
       f.store.approveRequest(publication.approval.approvalId, actor(OWNER_3), publication.payload, 'v1', 'approve-b', NOW),
     ]);
     assert.equal(approvals.filter((result) => result.ok).length, 1);
+    const consumptions = await Promise.all([
+      f.store.consumeApproval(publication.approval.approvalId, actor(OWNER_1), 'publication.publish', publication.resource, publication.payload, 'v1', 'consume-a', NOW),
+      f.store.consumeApproval(publication.approval.approvalId, actor(OWNER_1), 'publication.publish', publication.resource, publication.payload, 'v1', 'consume-b', NOW),
+    ]);
+    assert.equal(consumptions.filter((result) => result.ok).length, 1);
 
     const target = 920_000_004;
     const resource = { kind: 'role' as const, id: String(target) };
